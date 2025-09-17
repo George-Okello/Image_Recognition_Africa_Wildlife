@@ -1,6 +1,6 @@
 """
 Main Streamlit Application for African Wildlife Classification System
-Updated with proper train/validation/test splitting
+Updated with proper train/validation/test splitting and comprehensive pipeline management
 """
 
 import streamlit as st
@@ -14,7 +14,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 import os
 
-# Import custom modules (these would need to be created separately)
+# Import custom modules
 try:
     from config import Config
     from session_manager import SessionManager
@@ -23,6 +23,11 @@ try:
     from ml_models import MLModelTrainer
     from deep_learning_models import DeepLearningTrainer
     from visualization_utils import ProfessionalVisualizer
+    from utils import (
+        validate_feature_pipeline, debug_feature_transformation,
+        display_pipeline_status, safe_make_prediction_with_debug,
+        StyleManager
+    )
 except ImportError:
     st.error("Required modules not found. Please ensure all custom modules are properly installed.")
     st.stop()
@@ -35,73 +40,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for professional styling
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 3rem;
-        color: #2E8B57;
-        text-align: center;
-        margin-bottom: 2rem;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-        font-weight: 700;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 15px;
-        color: white;
-        text-align: center;
-        margin: 0.5rem 0;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    .success-box {
-        background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
-        border-left: 5px solid #28a745;
-        padding: 1rem;
-        margin: 1rem 0;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    }
-    .warning-box {
-        background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
-        border-left: 5px solid #ffc107;
-        padding: 1rem;
-        margin: 1rem 0;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    }
-    .info-box {
-        background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);
-        border-left: 5px solid #17a2b8;
-        padding: 1rem;
-        margin: 1rem 0;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    }
-    .status-card {
-        background: white;
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid #e0e0e0;
-        margin: 0.5rem 0;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-    }
-    .stProgress > div > div > div > div {
-        background-color: #2E8B57;
-    }
-    .nav-section {
-        background: #f8f9fa;
-        padding: 1rem;
-        border-radius: 10px;
-        margin-bottom: 1rem;
-        border: 1px solid #dee2e6;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Apply custom CSS
+st.markdown(StyleManager.create_custom_css(), unsafe_allow_html=True)
+
 
 class WildlifeClassificationApp:
-    """Main application class with proper validation strategy"""
+    """Main application class with proper validation strategy and pipeline management"""
 
     def __init__(self):
         self.session_manager = SessionManager()
@@ -141,7 +85,7 @@ class WildlifeClassificationApp:
             else:
                 validation_type = "Train/Val/Test"
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-container">
                 <h3>{validation_type}</h3>
                 <p>Validation</p>
             </div>
@@ -150,7 +94,7 @@ class WildlifeClassificationApp:
         with col2:
             device_info = "GPU" if hasattr(Config, 'DEVICE') and Config.DEVICE.type == "cuda" else "CPU"
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-container">
                 <h3>{device_info}</h3>
                 <p>Device</p>
             </div>
@@ -159,7 +103,7 @@ class WildlifeClassificationApp:
         with col3:
             n_jobs = getattr(Config, 'N_JOBS', 'Auto')
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-container">
                 <h3>{n_jobs}</h3>
                 <p>CPU Cores</p>
             </div>
@@ -175,7 +119,7 @@ class WildlifeClassificationApp:
                 test_size = getattr(Config, 'TEST_SIZE', 0.15)
                 split_info = f"{train_size*100:.0f}/{val_size*100:.0f}/{test_size*100:.0f}"
             st.markdown(f"""
-            <div class="metric-card">
+            <div class="metric-container">
                 <h3>{split_info}</h3>
                 <p>Data Split %</p>
             </div>
@@ -262,7 +206,7 @@ class WildlifeClassificationApp:
         with col1:
             if hasattr(Config, 'USE_CROSS_VALIDATION') and Config.USE_CROSS_VALIDATION:
                 st.markdown(f"""
-                <div class="info-box">
+                <div class="info-message">
                 <strong>Cross-Validation Approach</strong><br>
                 • {Config.CV_FOLDS}-fold cross-validation for model selection<br>
                 • Separate test set ({Config.TEST_SIZE*100:.0f}%) for final evaluation<br>
@@ -275,7 +219,7 @@ class WildlifeClassificationApp:
                 val_size = getattr(Config, 'VALIDATION_SIZE', 0.15)
                 test_size = getattr(Config, 'TEST_SIZE', 0.15)
                 st.markdown(f"""
-                <div class="info-box">
+                <div class="info-message">
                 <strong>Train/Validation/Test Split</strong><br>
                 • Training set ({train_size*100:.0f}%) for model training<br>
                 • Validation set ({val_size*100:.0f}%) for model selection<br>
@@ -286,7 +230,7 @@ class WildlifeClassificationApp:
 
         with col2:
             st.markdown(f"""
-            <div class="success-box">
+            <div class="success-message">
             <strong>Why This Matters</strong><br>
             • Prevents overfitting to test data<br>
             • Provides honest performance estimates<br>
@@ -306,38 +250,69 @@ class WildlifeClassificationApp:
             if 'eda_results' in st.session_state:
                 eda_results = st.session_state.eda_results
 
-                # Show quick statistics
+                # Show quick statistics from EDA results
                 dataset_info = eda_results.get('dataset_info', {})
                 total_images = dataset_info.get('total_images', 0)
+                image_stats = eda_results.get('image_stats', {})
+                quality_report = eda_results.get('quality_report', {})
 
-                col3, col4, col5 = st.columns(3)
+                # Quick metrics overview
+                col3, col4, col5, col6 = st.columns(4)
                 with col3:
                     st.metric("Total Images", f"{total_images:,}")
                 with col4:
                     classes = getattr(Config, 'CLASSES', ['buffalo', 'elephant', 'rhino', 'zebra'])
                     st.metric("Classes", len(classes))
                 with col5:
-                    balance_ratio = max([info['count'] if isinstance(info, dict) else info
-                                       for info in class_counts.values()]) / \
-                                  min([info['count'] if isinstance(info, dict) else info
-                                      for info in class_counts.values()])
-                    st.metric("Balance Ratio", f"{balance_ratio:.1f}")
+                    if class_counts:
+                        balance_ratio = max([info['count'] if isinstance(info, dict) else info
+                                           for info in class_counts.values()]) / \
+                                      min([info['count'] if isinstance(info, dict) else info
+                                          for info in class_counts.values()])
+                        st.metric("Balance Ratio", f"{balance_ratio:.1f}")
+                    else:
+                        st.metric("Balance Ratio", "N/A")
+                with col6:
+                    quality_score = quality_report.get('quality_score', 0)
+                    st.metric("Quality Score", f"{quality_score}%")
 
-                # Visualize dataset
-                self.visualizer.create_dataset_analysis_dashboard(dataset_info)
+                # Display recommendations if available
+                recommendations = eda_results.get('recommendations', [])
+                if recommendations:
+                    with st.expander("💡 Dataset Recommendations"):
+                        for rec in recommendations:
+                            st.write(f"• {rec}")
 
+                # Note: The detailed EDA visualizations are already displayed
+                # by the data_manager.perform_comprehensive_eda() method
+                st.info("All detailed visualizations, sample images, and statistics are displayed above during EDA execution.")
+
+            # Re-run EDA option
             if st.button("🔄 Re-run EDA"):
+                # Clear previous EDA state
+                st.session_state.eda_completed = False
+                st.session_state.eda_results = None
+
                 with st.spinner("Performing comprehensive EDA..."):
-                    self.data_manager.perform_comprehensive_eda()
-                    self.session_manager.save_session()
-                    st.rerun()
+                    eda_results = self.data_manager.perform_comprehensive_eda()
+                    if eda_results:
+                        self.session_manager.save_session()
+                        st.success("EDA re-run completed! Updated visualizations are displayed above.")
+                    else:
+                        st.error("EDA failed. Please check your dataset structure.")
+                # Note: No st.rerun() here - let user see the new results
         else:
             st.info("EDA not completed yet")
             if st.button("🚀 Start EDA", type="primary"):
                 with st.spinner("Performing comprehensive EDA..."):
-                    self.data_manager.perform_comprehensive_eda()
-                    self.session_manager.save_session()
-                    st.rerun()
+                    # The perform_comprehensive_eda method now handles all visualizations internally
+                    eda_results = self.data_manager.perform_comprehensive_eda()
+                    if eda_results:
+                        self.session_manager.save_session()
+                        st.success("EDA completed! All visualizations are displayed above.")
+                        # Don't rerun immediately - let user see the results
+                    else:
+                        st.error("EDA failed. Please check your dataset structure.")
 
     def show_traditional_ml(self):
         """Display traditional ML training interface with proper validation"""
@@ -400,7 +375,7 @@ class WildlifeClassificationApp:
             self.train_traditional_ml(use_optimized, perform_feature_selection, train_ensembles)
 
     def train_traditional_ml(self, use_optimized, perform_feature_selection, train_ensembles):
-        """Train traditional ML models with proper train/validation/test splits"""
+        """Train traditional ML models with proper train/validation/test splits and pipeline management"""
 
         start_time = time.time()
 
@@ -423,7 +398,7 @@ class WildlifeClassificationApp:
                 else:
                     st.success(f"✅ Features extracted! Train: {X_train.shape[0]}, Val: {X_val.shape[0]}, Test: {X_test.shape[0]}")
 
-                st.info(f"Feature dimension: {X_train.shape[1]}")
+                st.info(f"Original feature dimension: {X_train.shape[1]}")
 
                 st.session_state.feature_extractor = feature_extractor
                 st.session_state.X_train = X_train
@@ -442,8 +417,10 @@ class WildlifeClassificationApp:
                 y_test = st.session_state.y_test
                 st.info("✅ Using cached features")
 
-            # Feature optimization
+            # Feature optimization with proper pipeline management
             X_train_final, X_val_final, X_test_final = X_train, X_val, X_test
+            feature_selector = None
+            pca_transformer = None
 
             if perform_feature_selection:
                 st.header("🎯 Advanced Feature Selection")
@@ -451,24 +428,60 @@ class WildlifeClassificationApp:
                 if 'feature_optimizer' not in st.session_state:
                     optimizer = FeatureOptimizer()
 
+                    # Feature selection
                     X_train_selected, X_val_selected, X_test_selected, best_selector = optimizer.compare_feature_selection_methods(
                         X_train, X_val, X_test, y_train, y_val, y_test
                     )
 
-                    X_train_final, X_val_final, X_test_final, final_features = optimizer.apply_pca_analysis(
+                    # PCA analysis
+                    X_train_final, X_val_final, X_test_final, final_components = optimizer.apply_pca_analysis(
                         X_train_selected, X_val_selected, X_test_selected, y_train, y_val, y_test
+                    )
+
+                    feature_selector = best_selector
+                    pca_transformer = optimizer.pca_transformer
+
+                    # Configure the feature pipeline in the extractor
+                    feature_extractor.set_feature_pipeline(
+                        feature_selector=feature_selector,
+                        pca_transformer=pca_transformer
                     )
 
                     # Store optimization results
                     original_features = X_train.shape[1]
+                    final_features = X_train_final.shape[1]
                     reduction_pct = (1 - final_features / original_features) * 100
                     st.session_state.feature_reduction_info = reduction_pct
 
+                    st.info(f"✅ Feature optimization complete: {original_features} → {final_features} features ({reduction_pct:.1f}% reduction)")
+
                     st.session_state.feature_optimizer = optimizer
-                    feature_extractor.selector = best_selector
+                    st.session_state.X_train_final = X_train_final
+                    st.session_state.X_val_final = X_val_final
+                    st.session_state.X_test_final = X_test_final
                 else:
                     optimizer = st.session_state.feature_optimizer
+                    X_train_final = st.session_state.X_train_final
+                    X_val_final = st.session_state.X_val_final
+                    X_test_final = st.session_state.X_test_final
+
+                    # Reconfigure the pipeline from stored optimizer
+                    feature_extractor.set_feature_pipeline(
+                        feature_selector=optimizer.best_selector,
+                        pca_transformer=optimizer.pca_transformer
+                    )
+
                     st.info("✅ Using cached feature optimization")
+            else:
+                # Even without feature selection, we need to configure the pipeline
+                feature_extractor.set_feature_pipeline(
+                    feature_selector=None,
+                    pca_transformer=None
+                )
+
+            # Display pipeline summary
+            st.info(f"Feature pipeline: {feature_extractor.get_pipeline_summary()}")
+            st.info(f"Expected features for prediction: {feature_extractor.get_expected_feature_count()}")
 
             # Model training with proper validation
             st.header("🤖 Model Training")
@@ -492,10 +505,10 @@ class WildlifeClassificationApp:
             else:
                 all_results = individual_results
 
-            # Store results
+            # Store results with pipeline information
             st.session_state.ml_results = all_results
             st.session_state.ml_models_trained = True
-            st.session_state.feature_extractor = feature_extractor
+            st.session_state.feature_extractor = feature_extractor  # Make sure the configured extractor is saved
 
             # Add training event
             training_time = time.time() - start_time
@@ -657,7 +670,7 @@ class WildlifeClassificationApp:
                     self.session_manager.add_training_event(
                         'Deep Learning Training',
                         'Custom CNN',
-                        results['best_accuracy'],  # This is now test accuracy
+                        results['best_accuracy'],
                         training_time
                     )
 
@@ -676,7 +689,7 @@ class WildlifeClassificationApp:
                     self.session_manager.add_training_event(
                         'Deep Learning Training',
                         'ResNet-18',
-                        results['best_accuracy'],  # This is now test accuracy
+                        results['best_accuracy'],
                         training_time
                     )
 
@@ -745,7 +758,7 @@ class WildlifeClassificationApp:
             for name, result in ml_results.items():
                 if result['model'] is not None and result['accuracy'] > 0:
                     all_results[f"ML_{name}"] = {
-                        'accuracy': result['accuracy'],  # This is test accuracy
+                        'accuracy': result['accuracy'],
                         'training_time': result.get('training_time', 0),
                         'model_type': 'Traditional ML'
                     }
@@ -754,7 +767,7 @@ class WildlifeClassificationApp:
         if st.session_state.get('cnn_trained', False) and 'cnn_results' in st.session_state:
             cnn_result = st.session_state.cnn_results
             all_results["Deep_Custom_CNN"] = {
-                'accuracy': cnn_result['best_accuracy'],  # This is test accuracy
+                'accuracy': cnn_result['best_accuracy'],
                 'training_time': 0,
                 'model_type': 'Deep Learning'
             }
@@ -762,7 +775,7 @@ class WildlifeClassificationApp:
         if st.session_state.get('resnet_trained', False) and 'resnet_results' in st.session_state:
             resnet_result = st.session_state.resnet_results
             all_results["Deep_ResNet18"] = {
-                'accuracy': resnet_result['best_accuracy'],  # This is test accuracy
+                'accuracy': resnet_result['best_accuracy'],
                 'training_time': 0,
                 'model_type': 'Deep Learning'
             }
@@ -802,7 +815,7 @@ class WildlifeClassificationApp:
 
         with col1:
             st.markdown(f"""
-            <div class="success-box">
+            <div class="success-message">
             <strong>🏆 Best Overall Performance</strong><br>
             Model: {best_model[0].replace('ML_', '').replace('Deep_', '').replace('_', ' ')}<br>
             Test Accuracy: {best_model[1]['accuracy']:.4f} ({best_model[1]['accuracy']*100:.2f}%)
@@ -822,7 +835,7 @@ class WildlifeClassificationApp:
                     diff = (best_ml - best_dl) * 100
 
                 st.markdown(f"""
-                <div class="info-box">
+                <div class="info-message">
                 <strong>📈 Method Comparison</strong><br>
                 {advantage} performs better<br>
                 Advantage: {diff:.2f} percentage points
@@ -834,7 +847,7 @@ class WildlifeClassificationApp:
             report_fig = self.visualizer.create_performance_report(all_results)
 
     def show_prediction_interface(self):
-        """Display prediction interface"""
+        """Display prediction interface with comprehensive validation"""
         st.header("🔮 Model Prediction Interface")
 
         # Check available models
@@ -892,7 +905,7 @@ class WildlifeClassificationApp:
                         self.make_prediction(image, selected_model, true_class=selected_class)
 
     def make_prediction(self, image, model_name, true_class=None):
-        """Make prediction on a single image"""
+        """Make prediction on a single image with comprehensive validation and debugging"""
 
         try:
             col1, col2 = st.columns(2)
@@ -901,55 +914,29 @@ class WildlifeClassificationApp:
                 st.subheader("🎯 Prediction Result")
 
                 if model_name.startswith("ML_"):
-                    # Traditional ML prediction
+                    # Traditional ML prediction with comprehensive validation
                     if 'feature_extractor' not in st.session_state:
                         st.error("Feature extractor not available")
                         return
 
-                    # Save image temporarily
-                    temp_path = "temp_pred_image.jpg"
-                    image.save(temp_path)
+                    if 'ml_results' not in st.session_state:
+                        st.error("ML results not available")
+                        return
 
-                    try:
-                        # Extract features
-                        feature_extractor = st.session_state.feature_extractor
-                        features = feature_extractor.extract_single_image_features(temp_path)
+                    feature_extractor = st.session_state.feature_extractor
+                    ml_results = st.session_state.ml_results
 
-                        if features is None:
-                            st.error("Could not extract features from image")
-                            return
+                    # Add debug toggle
+                    debug_mode = st.checkbox("Enable Debug Mode", help="Show detailed pipeline information")
 
-                        # Scale and select features
-                        features_scaled = feature_extractor.scaler.transform([features])
-                        if feature_extractor.selector:
-                            features_selected = feature_extractor.selector.transform(features_scaled)
-                        else:
-                            features_selected = features_scaled
+                    # Use the safe prediction function with validation
+                    prediction, probabilities, result_message = safe_make_prediction_with_debug(
+                        image, model_name, feature_extractor, ml_results, debug_mode
+                    )
 
-                        # Get model and predict
-                        model_key = model_name.replace("ML_", "")
-                        if 'ml_results' in st.session_state and model_key in st.session_state.ml_results:
-                            model = st.session_state.ml_results[model_key]['model']
-
-                            if model is None:
-                                st.error(f"Model {model_key} is not available")
-                                return
-
-                            prediction = model.predict(features_selected)[0]
-
-                            # Get probabilities if available
-                            if hasattr(model, 'predict_proba'):
-                                probabilities = model.predict_proba(features_selected)[0]
-                            else:
-                                probabilities = None
-                        else:
-                            st.error(f"Model {model_key} not found in results")
-                            return
-
-                    finally:
-                        # Clean up temporary file
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
+                    if prediction is None:
+                        st.error(f"Prediction failed: {result_message}")
+                        return
 
                 else:
                     # Deep learning prediction
@@ -1018,18 +1005,37 @@ class WildlifeClassificationApp:
                     # Confidence assessment
                     max_prob = np.max(probabilities)
                     if max_prob > 0.8:
-                        st.markdown('<div class="success-box">High Confidence Prediction</div>',
-                                   unsafe_allow_html=True)
+                        st.success("🟢 High Confidence Prediction")
                     elif max_prob > 0.6:
-                        st.markdown('<div class="info-box">Medium Confidence Prediction</div>',
-                                   unsafe_allow_html=True)
+                        st.info("🟡 Medium Confidence Prediction")
                     else:
-                        st.markdown('<div class="warning-box">Low Confidence Prediction</div>',
-                                   unsafe_allow_html=True)
+                        st.warning("🔴 Low Confidence Prediction")
 
         except Exception as e:
             st.error(f"Prediction failed: {str(e)}")
             st.exception(e)
+
+            # Additional debugging information
+            if st.checkbox("Show Debug Information"):
+                st.subheader("🔧 Debug Information")
+
+                if 'feature_extractor' in st.session_state:
+                    display_pipeline_status(st.session_state.feature_extractor)
+
+                if model_name.startswith("ML_") and 'ml_results' in st.session_state:
+                    model_key = model_name.replace("ML_", "")
+                    if model_key in st.session_state.ml_results:
+                        model_info = st.session_state.ml_results[model_key]
+                        st.write(f"Model info available: {model_info is not None}")
+                        if model_info and 'model' in model_info:
+                            st.write(f"Model object: {model_info['model'] is not None}")
+                            if hasattr(model_info['model'], 'n_features_in_'):
+                                st.write(f"Model expects {model_info['model'].n_features_in_} features")
+
+                st.write("Session state keys:")
+                for key in st.session_state.keys():
+                    if not key.startswith('_'):
+                        st.write(f"- {key}")
 
     def run(self):
         """Main application runner"""
@@ -1062,6 +1068,7 @@ class WildlifeClassificationApp:
             self.show_model_comparison()
         elif page == "🔮 Prediction Interface":
             self.show_prediction_interface()
+
 
 # Main execution
 def main():

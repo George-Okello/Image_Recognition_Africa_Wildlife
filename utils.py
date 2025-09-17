@@ -1,6 +1,7 @@
 """
 Professional utility functions for the Wildlife Classification System
 Comprehensive utilities with enhanced functionality and professional visualization
+Updated with pipeline validation and debugging capabilities
 """
 
 import os
@@ -28,6 +29,204 @@ from config import (Config, DATA_CONFIG, MODEL_CONFIG, FEATURE_CONFIG, UI_CONFIG
 # Set visualization style
 plt.style.use(VISUALIZATION_CONFIG.style)
 sns.set_palette(VISUALIZATION_CONFIG.color_palette)
+
+
+# Pipeline Validation and Debugging Utilities
+def validate_feature_pipeline(feature_extractor, model_name, ml_results):
+    """
+    Validate that the feature pipeline is correctly configured for prediction
+    Returns (is_valid, error_message, expected_features)
+    """
+
+    # Check if feature extractor exists and is fitted
+    if feature_extractor is None:
+        return False, "Feature extractor not found", None
+
+    if not hasattr(feature_extractor, 'is_fitted') or not feature_extractor.is_fitted:
+        return False, "Feature extractor not fitted. Please train models first.", None
+
+    # Check if model exists
+    model_key = model_name.replace("ML_", "")
+    if model_key not in ml_results:
+        return False, f"Model '{model_key}' not found in results", None
+
+    model_info = ml_results[model_key]
+    if model_info['model'] is None:
+        return False, f"Model '{model_key}' is None", None
+
+    model = model_info['model']
+
+    # Get expected features from the trained model
+    if hasattr(model, 'n_features_in_'):
+        model_expected_features = model.n_features_in_
+    elif hasattr(model, 'coef_'):
+        model_expected_features = model.coef_.shape[1] if len(model.coef_.shape) > 1 else len(model.coef_)
+    else:
+        model_expected_features = "unknown"
+
+    # Get expected features from pipeline
+    pipeline_expected_features = feature_extractor.get_expected_feature_count()
+
+    # Check if they match
+    if isinstance(model_expected_features, int) and isinstance(pipeline_expected_features, int):
+        if model_expected_features != pipeline_expected_features:
+            return False, f"Feature count mismatch: model expects {model_expected_features}, pipeline produces {pipeline_expected_features}", model_expected_features
+
+    return True, "Pipeline validation successful", model_expected_features
+
+def debug_feature_transformation(feature_extractor, raw_features):
+    """
+    Debug the feature transformation pipeline step by step
+    """
+    st.subheader("Feature Pipeline Debug")
+
+    if raw_features is None:
+        st.error("Raw features are None")
+        return None
+
+    st.write(f"**Step 0 - Raw features:** {raw_features.shape}")
+
+    # Ensure 2D
+    if len(raw_features.shape) == 1:
+        features = raw_features.reshape(1, -1)
+        st.write(f"**Step 1 - Reshaped to 2D:** {features.shape}")
+    else:
+        features = raw_features
+        st.write(f"**Step 1 - Already 2D:** {features.shape}")
+
+    # Scaling
+    try:
+        if feature_extractor.scaler is not None:
+            features_scaled = feature_extractor.scaler.transform(features)
+            st.write(f"**Step 2 - After scaling:** {features_scaled.shape}")
+        else:
+            features_scaled = features
+            st.write(f"**Step 2 - No scaling applied:** {features_scaled.shape}")
+    except Exception as e:
+        st.error(f"Error in scaling step: {e}")
+        return None
+
+    # Feature selection
+    try:
+        if feature_extractor.feature_selector is not None:
+            features_selected = feature_extractor.feature_selector.transform(features_scaled)
+            st.write(f"**Step 3 - After feature selection:** {features_selected.shape}")
+        else:
+            features_selected = features_scaled
+            st.write(f"**Step 3 - No feature selection:** {features_selected.shape}")
+    except Exception as e:
+        st.error(f"Error in feature selection step: {e}")
+        return None
+
+    # PCA
+    try:
+        if feature_extractor.pca_transformer is not None:
+            features_final = feature_extractor.pca_transformer.transform(features_selected)
+            st.write(f"**Step 4 - After PCA:** {features_final.shape}")
+        else:
+            features_final = features_selected
+            st.write(f"**Step 4 - No PCA applied:** {features_final.shape}")
+    except Exception as e:
+        st.error(f"Error in PCA step: {e}")
+        return None
+
+    st.success(f"**Final transformed features:** {features_final.shape}")
+    return features_final
+
+def display_pipeline_status(feature_extractor):
+    """Display the current pipeline configuration"""
+    st.subheader("Pipeline Status")
+
+    if feature_extractor is None:
+        st.error("Feature extractor not found")
+        return
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write("**Pipeline Components:**")
+        if hasattr(feature_extractor, 'pipeline_info'):
+            info = feature_extractor.pipeline_info
+            st.write(f"- Original features: {info.get('original_features', 'Unknown')}")
+            st.write(f"- Scaling: {'✅' if info.get('scaling_applied', False) else '❌'}")
+            st.write(f"- Feature selection: {'✅' if info.get('feature_selection_applied', False) else '❌'}")
+            st.write(f"- PCA: {'✅' if info.get('pca_applied', False) else '❌'}")
+        else:
+            st.write("Pipeline info not available")
+
+    with col2:
+        st.write("**Expected Output:**")
+        expected_features = feature_extractor.get_expected_feature_count()
+        st.write(f"- Final feature count: {expected_features}")
+
+        if hasattr(feature_extractor, 'pipeline_info'):
+            st.write(f"- Pipeline summary: {feature_extractor.get_pipeline_summary()}")
+
+def safe_make_prediction_with_debug(image, model_name, feature_extractor, ml_results, debug_mode=False):
+    """
+    Make prediction with comprehensive debugging and validation
+    """
+
+    # Step 1: Validate pipeline
+    is_valid, error_msg, expected_features = validate_feature_pipeline(feature_extractor, model_name, ml_results)
+
+    if not is_valid:
+        st.error(f"Pipeline validation failed: {error_msg}")
+        if debug_mode:
+            display_pipeline_status(feature_extractor)
+        return None, None, error_msg
+
+    # Step 2: Extract features
+    temp_path = "temp_pred_image.jpg"
+    image.save(temp_path)
+
+    try:
+        raw_features = feature_extractor.extract_single_image_features(temp_path)
+
+        if raw_features is None:
+            return None, None, "Could not extract features from image"
+
+        if debug_mode:
+            st.write(f"Raw features extracted: {raw_features.shape}")
+
+        # Step 3: Transform features with optional debugging
+        if debug_mode:
+            features_transformed = debug_feature_transformation(feature_extractor, raw_features)
+        else:
+            features_transformed = feature_extractor.transform_features(raw_features)
+
+        if features_transformed is None:
+            return None, None, "Feature transformation failed"
+
+        # Step 4: Final validation before prediction
+        model_key = model_name.replace("ML_", "")
+        model = ml_results[model_key]['model']
+
+        if debug_mode:
+            st.write(f"Model expects: {expected_features} features")
+            st.write(f"Providing: {features_transformed.shape[1]} features")
+
+        # Step 5: Make prediction
+        prediction = model.predict(features_transformed)[0]
+
+        # Get probabilities if available
+        probabilities = None
+        if hasattr(model, 'predict_proba'):
+            probabilities = model.predict_proba(features_transformed)[0]
+
+        return prediction, probabilities, "Success"
+
+    except Exception as e:
+        error_msg = f"Prediction error: {str(e)}"
+        if debug_mode:
+            st.error(error_msg)
+            st.exception(e)
+        return None, None, error_msg
+
+    finally:
+        # Clean up
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 class ImageProcessor:
@@ -730,7 +929,7 @@ class PredictionInterface:
         col1, col2 = st.columns([1, 1])
 
         with col1:
-            st.subheader("🎯 Prediction Result")
+            st.subheader("Prediction Result")
 
             # Create metrics display
             col1a, col1b = st.columns(2)
@@ -746,15 +945,15 @@ class PredictionInterface:
 
                     # Confidence level indicator
                     if confidence > 0.8:
-                        st.success("🟢 High Confidence")
+                        st.success("High Confidence")
                     elif confidence > 0.6:
-                        st.warning("🟡 Medium Confidence")
+                        st.warning("Medium Confidence")
                     else:
-                        st.error("🔴 Low Confidence")
+                        st.error("Low Confidence")
 
             if true_class:
                 is_correct = predicted_class.lower() == true_class.lower()
-                result_text = "✅ Correct" if is_correct else "❌ Incorrect"
+                result_text = "Correct" if is_correct else "Incorrect"
                 result_color = "success" if is_correct else "error"
 
                 if is_correct:
@@ -765,7 +964,7 @@ class PredictionInterface:
 
         with col2:
             if probabilities is not None:
-                st.subheader("📊 Class Probabilities")
+                st.subheader("Class Probabilities")
 
                 # Create probability DataFrame
                 prob_df = pd.DataFrame({
@@ -796,7 +995,7 @@ class PredictionInterface:
                 st.plotly_chart(fig, use_container_width=True)
 
                 # Probability table
-                st.subheader("📋 Detailed Probabilities")
+                st.subheader("Detailed Probabilities")
                 st.dataframe(
                     prob_df.style.format({'Probability': '{:.4f}', 'Percentage': '{:.2f}%'}),
                     use_container_width=True
@@ -892,89 +1091,9 @@ class StyleManager:
                 color: #0c5460;
             }}
             
-            /* Sidebar Styling */
-            .sidebar-section {{
-                background: #f8f9fa;
-                padding: 1.5rem;
-                border-radius: 10px;
-                margin-bottom: 1rem;
-                border: 1px solid #dee2e6;
-            }}
-            
-            /* Button Styling */
-            .stButton > button {{
-                border-radius: 10px;
-                border: none;
-                background: linear-gradient(135deg, {UI_CONFIG.primary_color}, {UI_CONFIG.secondary_color});
-                color: white;
-                font-weight: 600;
-                transition: all 0.3s ease;
-                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            }}
-            
-            .stButton > button:hover {{
-                transform: translateY(-2px);
-                box-shadow: 0 8px 16px rgba(0,0,0,0.2);
-            }}
-            
             /* Progress Bar */
             .stProgress > div > div > div > div {{
                 background: linear-gradient(135deg, {UI_CONFIG.primary_color}, {UI_CONFIG.secondary_color});
-            }}
-            
-            /* Metrics */
-            .metric-value {{
-                font-size: 2rem;
-                font-weight: 700;
-                color: {UI_CONFIG.primary_color};
-            }}
-            
-            .metric-label {{
-                font-size: 0.9rem;
-                color: #666;
-                text-transform: uppercase;
-                letter-spacing: 1px;
-            }}
-            
-            /* Tables */
-            .stDataFrame {{
-                border-radius: 10px;
-                overflow: hidden;
-                box-shadow: 0 4px 8px rgba(0,0,0,0.05);
-            }}
-            
-            /* Custom badges */
-            .status-badge-success {{
-                background-color: {UI_CONFIG.success_color};
-                color: white;
-                padding: 0.25rem 0.75rem;
-                border-radius: 20px;
-                font-size: 0.8rem;
-                font-weight: 600;
-                display: inline-block;
-                margin: 0.25rem;
-            }}
-            
-            .status-badge-warning {{
-                background-color: {UI_CONFIG.warning_color};
-                color: #212529;
-                padding: 0.25rem 0.75rem;
-                border-radius: 20px;
-                font-size: 0.8rem;
-                font-weight: 600;
-                display: inline-block;
-                margin: 0.25rem;
-            }}
-            
-            .status-badge-info {{
-                background-color: {UI_CONFIG.info_color};
-                color: white;
-                padding: 0.25rem 0.75rem;
-                border-radius: 20px;
-                font-size: 0.8rem;
-                font-weight: 600;
-                display: inline-block;
-                margin: 0.25rem;
             }}
         </style>
         """
@@ -995,26 +1114,6 @@ class StyleManager:
         """Display styled warning message"""
         st.markdown(f"""
         <div class="warning-message">
-            <h4>{title}</h4>
-            <p>{message}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    @staticmethod
-    def display_error_message(message: str, title: str = "Error"):
-        """Display styled error message"""
-        st.markdown(f"""
-        <div class="error-message">
-            <h4>{title}</h4>
-            <p>{message}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    @staticmethod
-    def display_info_message(message: str, title: str = "Information"):
-        """Display styled info message"""
-        st.markdown(f"""
-        <div class="info-message">
             <h4>{title}</h4>
             <p>{message}</p>
         </div>
@@ -1120,46 +1219,6 @@ class ReportGenerator:
             report.append(f"Training Time: {best_result.get('training_time', 0):.2f} seconds")
             report.append("")
 
-            # Performance statistics
-            accuracies = [r.get('accuracy', 0) for r in all_results.values()]
-            report.append("PERFORMANCE STATISTICS")
-            report.append("-" * 40)
-            report.append(f"Best Performance: {max(accuracies):.4f}")
-            report.append(f"Average Performance: {np.mean(accuracies):.4f}")
-            report.append(f"Standard Deviation: {np.std(accuracies):.4f}")
-            report.append(f"Performance Range: {max(accuracies) - min(accuracies):.4f}")
-            report.append("")
-
-            # Model type analysis
-            traditional_ml = [r for n, r in all_results.items() if 'Individual' in n or any(x in n for x in ['SVM', 'Random', 'Logistic', 'KNN', 'Bayes'])]
-            ensemble_methods = [r for n, r in all_results.items() if any(x in n for x in ['Voting', 'Bagging', 'Boosting', 'Stacking'])]
-            deep_learning = [r for n, r in all_results.items() if any(x in n for x in ['CNN', 'ResNet'])]
-
-            if traditional_ml:
-                report.append(f"Traditional ML Average: {np.mean([r.get('accuracy', 0) for r in traditional_ml]):.4f}")
-            if ensemble_methods:
-                report.append(f"Ensemble Methods Average: {np.mean([r.get('accuracy', 0) for r in ensemble_methods]):.4f}")
-            if deep_learning:
-                report.append(f"Deep Learning Average: {np.mean([r.get('accuracy', 0) for r in deep_learning]):.4f}")
-
-        # Recommendations
-        report.append("")
-        report.append("RECOMMENDATIONS")
-        report.append("-" * 40)
-
-        if all_results:
-            best_acc = max([r.get('accuracy', 0) for r in all_results.values()])
-
-            if best_acc > 0.9:
-                report.append("Excellent performance achieved! Consider deployment.")
-            elif best_acc > 0.8:
-                report.append("Good performance. Consider additional data or hyperparameter tuning.")
-            elif best_acc > 0.7:
-                report.append("Moderate performance. Recommend data augmentation and model optimization.")
-            else:
-                report.append("Performance needs improvement. Consider data quality review and advanced techniques.")
-
-        report.append("")
         report.append("=" * 80)
 
         # Join report and optionally save
@@ -1172,149 +1231,6 @@ class ReportGenerator:
                 f.write(report_text)
 
         return report_text
-
-    @staticmethod
-    def export_results_to_csv(all_results: Dict, save_path: str = None) -> pd.DataFrame:
-        """Export results to CSV format"""
-
-        # Create comprehensive DataFrame
-        export_data = []
-
-        for name, result in all_results.items():
-            if isinstance(result, dict):
-                export_data.append({
-                    'Model_Name': name,
-                    'Accuracy': result.get('accuracy', 0),
-                    'Training_Time_Seconds': result.get('training_time', 0),
-                    'Model_Type': 'Traditional_ML' if any(x in name for x in ['Individual', 'SVM', 'Random', 'Logistic']) else 'Ensemble' if any(x in name for x in ['Voting', 'Bagging', 'Boosting']) else 'Deep_Learning',
-                    'Timestamp': datetime.now().isoformat(),
-                    'Device': str(DEEP_LEARNING_CONFIG.device),
-                    'Dataset_Classes': len(DATA_CONFIG.classes),
-                    'Image_Size_Traditional': f"{FEATURE_CONFIG.target_size[0]}x{FEATURE_CONFIG.target_size[1]}",
-                    'Image_Size_Deep': f"{DEEP_LEARNING_CONFIG.deep_img_size}x{DEEP_LEARNING_CONFIG.deep_img_size}"
-                })
-
-        df = pd.DataFrame(export_data)
-        df = df.sort_values('Accuracy', ascending=False)
-
-        if save_path:
-            ensure_directories()
-            os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
-            df.to_csv(save_path, index=False)
-            st.success(f"Results exported to {save_path}")
-
-        return df
-
-
-class SystemDiagnostics:
-    """System diagnostics and health check utilities"""
-
-    @staticmethod
-    def run_system_diagnostics() -> Dict:
-        """Run comprehensive system diagnostics"""
-
-        diagnostics = {
-            'timestamp': datetime.now().isoformat(),
-            'system_info': {},
-            'data_checks': {},
-            'model_checks': {},
-            'performance_info': {}
-        }
-
-        # System information
-        diagnostics['system_info'] = {
-            'device': str(DEEP_LEARNING_CONFIG.device),
-            'cpu_cores_available': os.cpu_count(),
-            'cpu_cores_used': PROCESSING_CONFIG.n_jobs,
-            'batch_size_ml': PROCESSING_CONFIG.batch_size,
-            'batch_size_dl': DEEP_LEARNING_CONFIG.batch_size
-        }
-
-        # Data checks
-        try:
-            from config import validate_data_directory
-            is_valid, message = validate_data_directory()
-            diagnostics['data_checks'] = {
-                'dataset_valid': is_valid,
-                'validation_message': message,
-                'expected_classes': DATA_CONFIG.classes,
-                'data_directory': get_data_path()
-            }
-        except Exception as e:
-            diagnostics['data_checks'] = {
-                'dataset_valid': False,
-                'error': str(e)
-            }
-
-        # Model directory checks
-        model_dirs = ['saved_models', 'cache', 'reports', 'temp']
-        diagnostics['model_checks'] = {
-            'directories_exist': {dir_name: os.path.exists(dir_name) for dir_name in model_dirs},
-            'model_files_present': {
-                'scaler': os.path.exists('saved_models/scaler.joblib'),
-                'selector': os.path.exists('saved_models/selector.joblib'),
-                'metadata': os.path.exists('saved_models/metadata.json')
-            }
-        }
-
-        # Performance configuration
-        diagnostics['performance_info'] = {
-            'parallel_processing_enabled': PROCESSING_CONFIG.n_jobs > 1,
-            'feature_selection_methods': len(PROCESSING_CONFIG.feature_selection_methods),
-            'pca_thresholds': len(PROCESSING_CONFIG.pca_variance_thresholds),
-            'deep_learning_ready': DEEP_LEARNING_CONFIG.device.type != 'cpu' if hasattr(DEEP_LEARNING_CONFIG.device, 'type') else False
-        }
-
-        return diagnostics
-
-    @staticmethod
-    def display_system_status(diagnostics: Dict = None):
-        """Display comprehensive system status"""
-
-        if diagnostics is None:
-            diagnostics = SystemDiagnostics.run_system_diagnostics()
-
-        st.subheader("🔧 System Diagnostics")
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.markdown("**System Information**")
-            sys_info = diagnostics['system_info']
-            st.text(f"Device: {sys_info.get('device', 'Unknown')}")
-            st.text(f"CPU Cores: {sys_info.get('cpu_cores_used', 0)}/{sys_info.get('cpu_cores_available', 0)}")
-            st.text(f"ML Batch Size: {sys_info.get('batch_size_ml', 0)}")
-            st.text(f"DL Batch Size: {sys_info.get('batch_size_dl', 0)}")
-
-        with col2:
-            st.markdown("**Data Status**")
-            data_checks = diagnostics['data_checks']
-
-            if data_checks.get('dataset_valid', False):
-                st.success("Dataset: Valid")
-            else:
-                st.error("Dataset: Invalid")
-
-            st.text(f"Classes: {len(DATA_CONFIG.classes)}")
-            st.text(f"Extensions: {len(DATA_CONFIG.valid_extensions)}")
-
-        with col3:
-            st.markdown("**Model Status**")
-            model_checks = diagnostics['model_checks']
-
-            dirs_ok = all(model_checks.get('directories_exist', {}).values())
-            if dirs_ok:
-                st.success("Directories: OK")
-            else:
-                st.warning("Directories: Missing")
-
-            files_ok = any(model_checks.get('model_files_present', {}).values())
-            if files_ok:
-                st.info("Model Files: Present")
-            else:
-                st.warning("Model Files: None")
-
-        return diagnostics
 
 
 # Convenience functions for backward compatibility

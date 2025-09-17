@@ -1,5 +1,6 @@
 """
 Data management and exploratory data analysis functionality
+Updated with complete EDA visualizations including sample images
 """
 
 import os
@@ -9,6 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from PIL import Image
 import cv2
 from collections import Counter
@@ -36,6 +38,7 @@ class DataManager:
             if os.path.exists(cls_path):
                 files = [f for f in os.listdir(cls_path)
                          if os.path.splitext(f)[1].lower() in Config.VALID_EXTS]
+
                 class_info[cls] = {
                     'count': len(files),
                     'files': files[:10]  # Store first 10 for samples
@@ -68,14 +71,17 @@ class DataManager:
         # 2. Class Distribution Analysis
         self._analyze_class_distribution()
 
-        # 3. Image Properties Analysis
-        image_stats = self._analyze_image_properties()
-
-        # 4. Sample Images Analysis
+        # 3. Sample Images Analysis
         self._display_sample_images()
+
+        # 4. Image Properties Analysis
+        image_stats = self._analyze_image_properties()
 
         # 5. Data Quality Assessment
         quality_report = self._assess_data_quality()
+
+        # 6. Advanced Visualizations
+        self._create_advanced_visualizations()
 
         # Compile EDA results
         self.eda_results = {
@@ -93,6 +99,8 @@ class DataManager:
 
     def _analyze_dataset_structure(self):
         """Analyze basic dataset structure"""
+        st.subheader("📈 Dataset Structure Overview")
+
         col1, col2, col3, col4 = st.columns(4)
 
         total_images = self.dataset_info['total_images']
@@ -109,12 +117,12 @@ class DataManager:
         with col3:
             st.metric("Avg per Class", f"{avg_per_class:.0f}")
         with col4:
-            imbalance_color = "red" if class_imbalance > 2 else "green"
-            st.metric("Class Imbalance Ratio", f"{class_imbalance:.1f}")
+            imbalance_color = "🔴" if class_imbalance > 2 else "🟢"
+            st.metric("Class Imbalance Ratio", f"{imbalance_color} {class_imbalance:.1f}")
 
     def _analyze_class_distribution(self):
         """Analyze and visualize class distribution"""
-        st.subheader("Class Distribution Analysis")
+        st.subheader("📊 Class Distribution Analysis")
 
         class_data = []
         for cls, info in self.dataset_info['class_distribution'].items():
@@ -138,6 +146,7 @@ class DataManager:
                 text='Count'
             )
             fig_bar.update_traces(texttemplate='%{text}', textposition='outside')
+            fig_bar.update_layout(height=400)
             st.plotly_chart(fig_bar, use_container_width=True)
 
         with col2:
@@ -147,6 +156,7 @@ class DataManager:
                 title='Class Distribution (%)',
                 color_discrete_sequence=px.colors.qualitative.Set3
             )
+            fig_pie.update_layout(height=400)
             st.plotly_chart(fig_pie, use_container_width=True)
 
         # Distribution table
@@ -159,30 +169,62 @@ class DataManager:
 
         if cv < 10:
             balance_status = "Well Balanced"
-            balance_color = "green"
+            balance_color = "🟢"
         elif cv < 25:
             balance_status = "Moderately Imbalanced"
-            balance_color = "orange"
+            balance_color = "🟡"
         else:
             balance_status = "Highly Imbalanced"
-            balance_color = "red"
+            balance_color = "🔴"
 
-        st.markdown(f"""
-        <div style="background-color: {balance_color}; padding: 10px; border-radius: 5px; color: white; margin: 10px 0;">
-        <strong>Class Balance Status: {balance_status}</strong><br>
-        Coefficient of Variation: {cv:.1f}%
-        </div>
-        """, unsafe_allow_html=True)
+        st.info(f"**Class Balance Status:** {balance_color} {balance_status} (CV: {cv:.1f}%)")
+
+    def _display_sample_images(self):
+        """Display sample images from each class with enhanced layout"""
+        st.subheader("🖼️ Sample Images by Class")
+
+        for cls in Config.CLASSES:
+            st.write(f"**{cls.title()} Samples**")
+            cls_path = os.path.join(Config.DATA_DIR, cls)
+
+            if os.path.exists(cls_path):
+                files = [f for f in os.listdir(cls_path)
+                         if os.path.splitext(f)[1].lower() in Config.VALID_EXTS]
+
+                if files:
+                    # Display first 4 images in a grid
+                    cols = st.columns(4)
+                    for i, filename in enumerate(files[:4]):
+                        try:
+                            img_path = os.path.join(cls_path, filename)
+                            img = Image.open(img_path)
+
+                            # Resize for consistent display
+                            img.thumbnail((200, 200), Image.Resampling.LANCZOS)
+
+                            with cols[i]:
+                                st.image(img, caption=f"Sample {i + 1}", use_column_width=True)
+                                # Show image dimensions
+                                original_img = Image.open(img_path)
+                                st.caption(f"Size: {original_img.width}x{original_img.height}")
+                        except Exception as e:
+                            with cols[i]:
+                                st.error(f"Error loading image: {str(e)}")
+                else:
+                    st.warning(f"No valid images found in {cls} directory")
+            else:
+                st.error(f"Directory not found: {cls_path}")
 
     def _analyze_image_properties(self):
         """Analyze image properties across the dataset"""
-        st.subheader("Image Properties Analysis")
+        st.subheader("📏 Image Properties Analysis")
 
         image_stats = {
             'dimensions': [],
             'file_sizes': [],
             'aspect_ratios': [],
-            'color_profiles': []
+            'color_profiles': [],
+            'file_formats': []
         }
 
         # Sample images for analysis
@@ -190,6 +232,7 @@ class DataManager:
         max_samples = 100  # Analyze first 100 images for speed
 
         progress_bar = st.progress(0)
+        status_text = st.empty()
 
         for cls, info in self.dataset_info['class_distribution'].items():
             cls_path = os.path.join(Config.DATA_DIR, cls)
@@ -212,16 +255,20 @@ class DataManager:
 
                     image_stats['dimensions'].append((width, height))
                     image_stats['aspect_ratios'].append(width / height)
+                    image_stats['file_formats'].append(img.format or 'Unknown')
 
                     # Color profile
                     if img.mode == 'RGB':
                         image_stats['color_profiles'].append('RGB')
                     elif img.mode == 'L':
                         image_stats['color_profiles'].append('Grayscale')
+                    elif img.mode == 'RGBA':
+                        image_stats['color_profiles'].append('RGBA')
                     else:
                         image_stats['color_profiles'].append('Other')
 
                     sample_count += 1
+                    status_text.text(f"Analyzing images: {sample_count}/{max_samples}")
                     progress_bar.progress(sample_count / max_samples)
 
                 except Exception as e:
@@ -231,95 +278,164 @@ class DataManager:
                 break
 
         progress_bar.empty()
+        status_text.empty()
 
         # Visualize image statistics
         if image_stats['dimensions']:
-            col1, col2 = st.columns(2)
-
-            with col1:
-                # Dimensions scatter plot
-                widths, heights = zip(*image_stats['dimensions'])
-                fig_dims = px.scatter(
-                    x=widths, y=heights,
-                    title='Image Dimensions Distribution',
-                    labels={'x': 'Width (pixels)', 'y': 'Height (pixels)'},
-                    opacity=0.6
-                )
-                st.plotly_chart(fig_dims, use_container_width=True)
-
-            with col2:
-                # File size histogram
-                fig_size = px.histogram(
-                    x=image_stats['file_sizes'],
-                    title='File Size Distribution',
-                    labels={'x': 'File Size (KB)', 'y': 'Count'},
-                    nbins=20
-                )
-                st.plotly_chart(fig_size, use_container_width=True)
-
-            # Statistics summary
-            stats_df = pd.DataFrame({
-                'Metric': ['Width (px)', 'Height (px)', 'File Size (KB)', 'Aspect Ratio'],
-                'Mean': [
-                    np.mean(widths),
-                    np.mean(heights),
-                    np.mean(image_stats['file_sizes']),
-                    np.mean(image_stats['aspect_ratios'])
-                ],
-                'Std Dev': [
-                    np.std(widths),
-                    np.std(heights),
-                    np.std(image_stats['file_sizes']),
-                    np.std(image_stats['aspect_ratios'])
-                ],
-                'Min': [
-                    min(widths),
-                    min(heights),
-                    min(image_stats['file_sizes']),
-                    min(image_stats['aspect_ratios'])
-                ],
-                'Max': [
-                    max(widths),
-                    max(heights),
-                    max(image_stats['file_sizes']),
-                    max(image_stats['aspect_ratios'])
-                ]
-            })
-
-            st.subheader("Image Statistics Summary")
-            st.dataframe(stats_df.round(2), use_container_width=True)
+            self._create_image_statistics_visualizations(image_stats)
+        else:
+            st.warning("No images could be analyzed for properties")
 
         return image_stats
 
-    def _display_sample_images(self):
-        """Display sample images from each class"""
-        st.subheader("Sample Images by Class")
+    def _create_image_statistics_visualizations(self, image_stats):
+        """Create comprehensive image statistics visualizations"""
 
-        for cls in Config.CLASSES:
-            st.write(f"**{cls.title()}**")
-            cls_path = os.path.join(Config.DATA_DIR, cls)
+        # Extract data
+        widths, heights = zip(*image_stats['dimensions'])
 
-            if os.path.exists(cls_path):
-                files = [f for f in os.listdir(cls_path)
-                         if os.path.splitext(f)[1].lower() in Config.VALID_EXTS]
+        # Create subplot figure
+        fig = make_subplots(
+            rows=2, cols=3,
+            subplot_titles=('Image Dimensions', 'File Size Distribution', 'Aspect Ratio Distribution',
+                          'Color Profile Distribution', 'File Format Distribution', 'Statistics Summary'),
+            specs=[[{"type": "scatter"}, {"type": "histogram"}, {"type": "histogram"}],
+                   [{"type": "pie"}, {"type": "pie"}, {"type": "table"}]]
+        )
 
-                if files:
-                    # Display first 4 images
-                    cols = st.columns(4)
-                    for i, filename in enumerate(files[:4]):
-                        try:
-                            img_path = os.path.join(cls_path, filename)
-                            img = Image.open(img_path)
+        # 1. Dimensions scatter plot
+        fig.add_trace(
+            go.Scatter(
+                x=widths, y=heights,
+                mode='markers',
+                name='Dimensions',
+                opacity=0.6,
+                marker=dict(color='blue', size=4)
+            ),
+            row=1, col=1
+        )
 
-                            with cols[i]:
-                                st.image(img, caption=f"Sample {i + 1}", use_container_width=True)
-                        except Exception as e:
-                            with cols[i]:
-                                st.error(f"Error loading image: {str(e)}")
+        # 2. File size histogram
+        fig.add_trace(
+            go.Histogram(
+                x=image_stats['file_sizes'],
+                name='File Size (KB)',
+                nbinsx=20,
+                marker_color='green'
+            ),
+            row=1, col=2
+        )
+
+        # 3. Aspect ratio histogram
+        fig.add_trace(
+            go.Histogram(
+                x=image_stats['aspect_ratios'],
+                name='Aspect Ratio',
+                nbinsx=20,
+                marker_color='orange'
+            ),
+            row=1, col=3
+        )
+
+        # 4. Color profile pie chart
+        color_counts = Counter(image_stats['color_profiles'])
+        fig.add_trace(
+            go.Pie(
+                labels=list(color_counts.keys()),
+                values=list(color_counts.values()),
+                name="Color Profiles"
+            ),
+            row=2, col=1
+        )
+
+        # 5. File format pie chart
+        format_counts = Counter(image_stats['file_formats'])
+        fig.add_trace(
+            go.Pie(
+                labels=list(format_counts.keys()),
+                values=list(format_counts.values()),
+                name="File Formats"
+            ),
+            row=2, col=2
+        )
+
+        # 6. Statistics summary table
+        stats_data = {
+            'Metric': ['Width (px)', 'Height (px)', 'File Size (KB)', 'Aspect Ratio'],
+            'Mean': [
+                f"{np.mean(widths):.1f}",
+                f"{np.mean(heights):.1f}",
+                f"{np.mean(image_stats['file_sizes']):.1f}",
+                f"{np.mean(image_stats['aspect_ratios']):.2f}"
+            ],
+            'Std Dev': [
+                f"{np.std(widths):.1f}",
+                f"{np.std(heights):.1f}",
+                f"{np.std(image_stats['file_sizes']):.1f}",
+                f"{np.std(image_stats['aspect_ratios']):.2f}"
+            ],
+            'Min': [
+                f"{min(widths)}",
+                f"{min(heights)}",
+                f"{min(image_stats['file_sizes']):.1f}",
+                f"{min(image_stats['aspect_ratios']):.2f}"
+            ],
+            'Max': [
+                f"{max(widths)}",
+                f"{max(heights)}",
+                f"{max(image_stats['file_sizes']):.1f}",
+                f"{max(image_stats['aspect_ratios']):.2f}"
+            ]
+        }
+
+        fig.add_trace(
+            go.Table(
+                header=dict(values=['Metric', 'Mean', 'Std Dev', 'Min', 'Max']),
+                cells=dict(values=[stats_data['Metric'], stats_data['Mean'],
+                                 stats_data['Std Dev'], stats_data['Min'], stats_data['Max']])
+            ),
+            row=2, col=3
+        )
+
+        # Update layout
+        fig.update_layout(
+            height=800,
+            showlegend=False,
+            title_text="Comprehensive Image Analysis Dashboard"
+        )
+
+        # Update subplot titles and axis labels
+        fig.update_xaxes(title_text="Width (pixels)", row=1, col=1)
+        fig.update_yaxes(title_text="Height (pixels)", row=1, col=1)
+        fig.update_xaxes(title_text="File Size (KB)", row=1, col=2)
+        fig.update_yaxes(title_text="Count", row=1, col=2)
+        fig.update_xaxes(title_text="Aspect Ratio", row=1, col=3)
+        fig.update_yaxes(title_text="Count", row=1, col=3)
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Additional statistics in expandable section
+        with st.expander("📊 Detailed Statistics"):
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric("Total Images Analyzed", len(image_stats['dimensions']))
+                st.metric("Average Width", f"{np.mean(widths):.0f} px")
+                st.metric("Average Height", f"{np.mean(heights):.0f} px")
+
+            with col2:
+                st.metric("Average File Size", f"{np.mean(image_stats['file_sizes']):.1f} KB")
+                st.metric("Most Common Format", max(format_counts, key=format_counts.get))
+                st.metric("Most Common Color Mode", max(color_counts, key=color_counts.get))
+
+            with col3:
+                st.metric("Min Dimensions", f"{min(widths)}x{min(heights)}")
+                st.metric("Max Dimensions", f"{max(widths)}x{max(heights)}")
+                st.metric("Aspect Ratio Range", f"{min(image_stats['aspect_ratios']):.2f} - {max(image_stats['aspect_ratios']):.2f}")
 
     def _assess_data_quality(self):
         """Assess overall data quality"""
-        st.subheader("Data Quality Assessment")
+        st.subheader("🔍 Data Quality Assessment")
 
         quality_issues = []
         recommendations = []
@@ -350,7 +466,7 @@ class DataManager:
             st.markdown("#### Quality Issues")
             if quality_issues:
                 for issue in quality_issues:
-                    st.markdown(f"❌ {issue}")
+                    st.markdown(f"⚠️ {issue}")
             else:
                 st.markdown("✅ No major quality issues detected")
 
@@ -367,6 +483,86 @@ class DataManager:
             'recommendations': recommendations,
             'quality_score': max(0, 100 - len(quality_issues) * 20)
         }
+
+    def _create_advanced_visualizations(self):
+        """Create advanced visualizations for deeper insights"""
+        st.subheader("📈 Advanced Dataset Insights")
+
+        # Class balance visualization
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Class balance radar chart
+            class_counts = [info['count'] for info in self.dataset_info['class_distribution'].values()]
+            class_names = [cls.title() for cls in Config.CLASSES]
+
+            # Normalize counts for radar chart
+            max_count = max(class_counts)
+            normalized_counts = [count / max_count for count in class_counts]
+
+            fig_radar = go.Figure()
+            fig_radar.add_trace(go.Scatterpolar(
+                r=normalized_counts + [normalized_counts[0]],  # Close the shape
+                theta=class_names + [class_names[0]],
+                fill='toself',
+                name='Class Balance'
+            ))
+
+            fig_radar.update_layout(
+                polar=dict(
+                    radialaxis=dict(
+                        visible=True,
+                        range=[0, 1]
+                    )),
+                showlegend=False,
+                title="Class Balance Radar Chart",
+                height=400
+            )
+            st.plotly_chart(fig_radar, use_container_width=True)
+
+        with col2:
+            # Dataset readiness score
+            total_images = self.dataset_info['total_images']
+            num_classes = len(Config.CLASSES)
+            balance_score = 1 - (max(class_counts) - min(class_counts)) / max(class_counts)
+            size_score = min(total_images / 1000, 1.0)  # Normalize to 1000 images
+
+            readiness_score = (balance_score * 0.4 + size_score * 0.6) * 100
+
+            fig_gauge = go.Figure(go.Indicator(
+                mode = "gauge+number+delta",
+                value = readiness_score,
+                domain = {'x': [0, 1], 'y': [0, 1]},
+                title = {'text': "Dataset Readiness Score"},
+                delta = {'reference': 80},
+                gauge = {
+                    'axis': {'range': [None, 100]},
+                    'bar': {'color': "darkblue"},
+                    'steps': [
+                        {'range': [0, 50], 'color': "lightgray"},
+                        {'range': [50, 80], 'color': "yellow"},
+                        {'range': [80, 100], 'color': "green"}],
+                    'threshold': {
+                        'line': {'color': "red", 'width': 4},
+                        'thickness': 0.75,
+                        'value': 90}}
+            ))
+            fig_gauge.update_layout(height=400)
+            st.plotly_chart(fig_gauge, use_container_width=True)
+
+        # Summary statistics
+        st.subheader("📋 Dataset Summary")
+        summary_cols = st.columns(4)
+
+        with summary_cols[0]:
+            st.metric("Readiness Score", f"{readiness_score:.1f}%")
+        with summary_cols[1]:
+            st.metric("Balance Score", f"{balance_score:.2f}")
+        with summary_cols[2]:
+            st.metric("Size Score", f"{size_score:.2f}")
+        with summary_cols[3]:
+            quality_rating = "Excellent" if readiness_score >= 90 else "Good" if readiness_score >= 70 else "Fair" if readiness_score >= 50 else "Poor"
+            st.metric("Overall Rating", quality_rating)
 
     def _generate_recommendations(self):
         """Generate training recommendations based on EDA"""
@@ -388,7 +584,9 @@ class DataManager:
 
         # Preprocessing recommendations
         recommendations.append("Apply standard image preprocessing (resize, normalize)")
-        recommendations.append("Consider advanced augmentation techniques")
+
+        if total_images < 2000:
+            recommendations.append("Consider advanced augmentation techniques")
 
         return recommendations
 

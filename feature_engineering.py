@@ -1,6 +1,6 @@
 """
 Feature extraction and optimization for traditional ML models
-Updated with proper train/validation/test splitting
+Updated with proper train/validation/test splitting and comprehensive pipeline management
 """
 
 import os
@@ -26,13 +26,16 @@ from config import Config
 
 
 class FeatureExtractor:
-    """Extract comprehensive features from images with proper data splitting"""
+    """Extract comprehensive features from images with proper pipeline management"""
 
     def __init__(self):
         self.scaler = StandardScaler()
-        self.selector = None
+        self.feature_selector = None  # Will store the best feature selector
+        self.pca_transformer = None   # Will store PCA if used
         self.feature_names = []
         self.extraction_stats = {}
+        self.is_fitted = False
+        self.pipeline_info = {}  # Track what transformations were applied
 
     def extract_single_image_features(self, image_path, extract_stats=False):
         """Extract comprehensive features from a single image"""
@@ -282,17 +285,106 @@ class FeatureExtractor:
                     st.metric("Test Samples", len(X_test))
                     st.metric("Test %", f"{(len(X_test) / len(X)) * 100:.1f}%")
 
+        # Fit the scaler on training data only
+        self.scaler.fit(X_train)
+        self.is_fitted = True
+
+        # Store pipeline info for later reference
+        self.pipeline_info = {
+            'original_features': X.shape[1],
+            'scaling_applied': True,
+            'feature_selection_applied': False,
+            'pca_applied': False
+        }
+
+        st.info("Feature scaler fitted on training data")
+
         return X_train, X_val, X_test, y_train, y_val, y_test
+
+    def set_feature_pipeline(self, feature_selector=None, pca_transformer=None):
+        """Set the complete feature transformation pipeline"""
+        self.feature_selector = feature_selector
+        self.pca_transformer = pca_transformer
+
+        # Update pipeline info
+        if feature_selector is not None:
+            self.pipeline_info['feature_selection_applied'] = True
+            if hasattr(feature_selector, 'k'):  # SelectKBest
+                self.pipeline_info['selected_features'] = feature_selector.k
+            elif hasattr(feature_selector, 'n_features_'):  # RFE or SelectFromModel
+                self.pipeline_info['selected_features'] = feature_selector.n_features_
+
+        if pca_transformer is not None:
+            self.pipeline_info['pca_applied'] = True
+            self.pipeline_info['pca_components'] = pca_transformer.n_components_
+
+        st.info(f"Feature pipeline configured: {self.get_pipeline_summary()}")
+
+    def get_pipeline_summary(self):
+        """Get a summary of the applied transformations"""
+        summary = []
+
+        if self.pipeline_info.get('scaling_applied', False):
+            summary.append("Scaling")
+
+        if self.pipeline_info.get('feature_selection_applied', False):
+            n_features = self.pipeline_info.get('selected_features', 'unknown')
+            summary.append(f"Feature Selection ({n_features} features)")
+
+        if self.pipeline_info.get('pca_applied', False):
+            n_components = self.pipeline_info.get('pca_components', 'unknown')
+            summary.append(f"PCA ({n_components} components)")
+
+        return " → ".join(summary) if summary else "No transformations"
+
+    def transform_features(self, features):
+        """Apply the complete transformation pipeline to features"""
+        if not self.is_fitted:
+            raise ValueError("FeatureExtractor must be fitted first by calling prepare_dataset()")
+
+        # Ensure features is 2D array
+        if len(features.shape) == 1:
+            features = features.reshape(1, -1)
+
+        # Step 1: Scale features
+        features_transformed = self.scaler.transform(features)
+
+        # Step 2: Apply feature selection if available
+        if self.feature_selector is not None:
+            features_transformed = self.feature_selector.transform(features_transformed)
+
+        # Step 3: Apply PCA if available
+        if self.pca_transformer is not None:
+            features_transformed = self.pca_transformer.transform(features_transformed)
+
+        return features_transformed
+
+    def get_expected_feature_count(self):
+        """Get the expected number of features after all transformations"""
+        if not self.is_fitted:
+            return None
+
+        expected_count = self.pipeline_info.get('original_features')
+
+        if self.pipeline_info.get('feature_selection_applied', False):
+            expected_count = self.pipeline_info.get('selected_features', expected_count)
+
+        if self.pipeline_info.get('pca_applied', False):
+            expected_count = self.pipeline_info.get('pca_components', expected_count)
+
+        return expected_count
 
 
 class FeatureOptimizer:
-    """Advanced feature selection and optimization with proper validation"""
+    """Advanced feature selection and optimization with proper pipeline management"""
 
     def __init__(self):
         self.scaler = StandardScaler()
         self.selection_methods = {}
         self.results = {}
         self.best_method = None
+        self.best_selector = None
+        self.pca_transformer = None
 
     def compare_feature_selection_methods(self, X_train, X_val, X_test, y_train, y_val, y_test):
         """Compare multiple feature selection methods using validation set"""
@@ -464,78 +556,15 @@ class FeatureOptimizer:
         best_method_name = self._select_best_method(performance_results)
         best_method_data = selection_methods[best_method_name]
 
+        # Store the best selector for pipeline configuration
+        self.best_selector = best_method_data['selector']
+
         # Store results
         self.results['feature_selection'] = performance_results
         self.best_method = best_method_name
         self.selection_methods = selection_methods
 
         return best_method_data['X_train'], best_method_data['X_val'], best_method_data['X_test'], best_method_data['selector']
-
-    def _display_feature_selection_results(self, performance_results, original_features):
-        """Display comprehensive feature selection results"""
-
-        # Create results table
-        results_data = []
-        for method, results in performance_results.items():
-            n_features = results['n_features']
-            reduction = (1 - n_features / original_features) * 100
-
-            if Config.USE_CROSS_VALIDATION:
-                results_data.append({
-                    'Method': method,
-                    'Features': n_features,
-                    'Reduction (%)': f"{reduction:.1f}%",
-                    'CV Accuracy': f"{results['accuracy']:.4f}",
-                    'CV Std': f"{results.get('std', 0):.4f}",
-                    'Time (s)': f"{results['time']:.2f}",
-                    'Description': results['description']
-                })
-            else:
-                results_data.append({
-                    'Method': method,
-                    'Features': n_features,
-                    'Reduction (%)': f"{reduction:.1f}%",
-                    'Val Accuracy': f"{results['accuracy']:.4f}",
-                    'Time (s)': f"{results['time']:.2f}",
-                    'Description': results['description']
-                })
-
-        st.subheader("Feature Selection Methods Comparison")
-        results_df = pd.DataFrame(results_data)
-        st.dataframe(results_df, use_container_width=True)
-
-    def _select_best_method(self, performance_results):
-        """Select the best feature selection method based on validation performance"""
-
-        # Simply select method with highest validation accuracy
-        best_method = max(performance_results.keys(),
-                         key=lambda x: performance_results[x]['accuracy'])
-
-        # Display recommendation
-        st.subheader("Feature Selection Recommendation")
-
-        best_results = performance_results[best_method]
-
-        if Config.USE_CROSS_VALIDATION:
-            st.markdown(f"""
-            **Recommended Method:** {best_method}
-
-            - **CV Accuracy:** {best_results['accuracy']:.4f} ± {best_results.get('std', 0):.4f}
-            - **Features:** {best_results['n_features']:,}
-            - **Training Time:** {best_results['time']:.2f}s
-            - **Description:** {best_results['description']}
-            """)
-        else:
-            st.markdown(f"""
-            **Recommended Method:** {best_method}
-
-            - **Validation Accuracy:** {best_results['accuracy']:.4f}
-            - **Features:** {best_results['n_features']:,}
-            - **Training Time:** {best_results['time']:.2f}s
-            - **Description:** {best_results['description']}
-            """)
-
-        return best_method
 
     def apply_pca_analysis(self, X_train_selected, X_val_selected, X_test_selected, y_train, y_val, y_test):
         """Apply PCA with comprehensive analysis using validation set"""
@@ -595,6 +624,73 @@ class FeatureOptimizer:
                            key=lambda x: pca_performance[x]['accuracy'])
         best_config = pca_results[best_threshold]
 
+        # Store the best PCA transformer
+        self.pca_transformer = best_config['pca']
+
         st.success(f"Best PCA configuration: {best_threshold*100:.0f}% variance ({best_config['n_components']} components)")
 
         return best_config['X_train'], best_config['X_val'], best_config['X_test'], best_config['n_components']
+
+    def _display_feature_selection_results(self, performance_results, original_features):
+        """Display comprehensive feature selection results"""
+        # Create results table
+        results_data = []
+        for method, results in performance_results.items():
+            n_features = results['n_features']
+            reduction = (1 - n_features / original_features) * 100
+
+            if Config.USE_CROSS_VALIDATION:
+                results_data.append({
+                    'Method': method,
+                    'Features': n_features,
+                    'Reduction (%)': f"{reduction:.1f}%",
+                    'CV Accuracy': f"{results['accuracy']:.4f}",
+                    'CV Std': f"{results.get('std', 0):.4f}",
+                    'Time (s)': f"{results['time']:.2f}",
+                    'Description': results['description']
+                })
+            else:
+                results_data.append({
+                    'Method': method,
+                    'Features': n_features,
+                    'Reduction (%)': f"{reduction:.1f}%",
+                    'Val Accuracy': f"{results['accuracy']:.4f}",
+                    'Time (s)': f"{results['time']:.2f}",
+                    'Description': results['description']
+                })
+
+        st.subheader("Feature Selection Methods Comparison")
+        results_df = pd.DataFrame(results_data)
+        st.dataframe(results_df, use_container_width=True)
+
+    def _select_best_method(self, performance_results):
+        """Select the best feature selection method based on validation performance"""
+        # Simply select method with highest validation accuracy
+        best_method = max(performance_results.keys(),
+                         key=lambda x: performance_results[x]['accuracy'])
+
+        # Display recommendation
+        st.subheader("Feature Selection Recommendation")
+
+        best_results = performance_results[best_method]
+
+        if Config.USE_CROSS_VALIDATION:
+            st.markdown(f"""
+            **Recommended Method:** {best_method}
+
+            - **CV Accuracy:** {best_results['accuracy']:.4f} ± {best_results.get('std', 0):.4f}
+            - **Features:** {best_results['n_features']:,}
+            - **Training Time:** {best_results['time']:.2f}s
+            - **Description:** {best_results['description']}
+            """)
+        else:
+            st.markdown(f"""
+            **Recommended Method:** {best_method}
+
+            - **Validation Accuracy:** {best_results['accuracy']:.4f}
+            - **Features:** {best_results['n_features']:,}
+            - **Training Time:** {best_results['time']:.2f}s
+            - **Description:** {best_results['description']}
+            """)
+
+        return best_method
