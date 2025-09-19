@@ -1,6 +1,6 @@
 """
 Complete Streamlit Application for African Wildlife Classification System
-With integrated deep learning visualizations
+Fixed version with stable visualizations and proper state management
 """
 
 import streamlit as st
@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 from PIL import Image
 import os
+import hashlib
 
 # Import custom modules
 try:
@@ -44,12 +45,81 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Apply custom CSS
-st.markdown(StyleManager.create_custom_css(), unsafe_allow_html=True)
+# Apply custom CSS with visualization fixes
+st.markdown("""
+<style>
+    /* Force plot refresh and visibility */
+    .js-plotly-plot .plotly .modebar {
+        display: block !important;
+    }
+    
+    .js-plotly-plot .plotly .modebar-container {
+        opacity: 1 !important;
+    }
+    
+    .stTabs [data-baseweb="tab-panel"] {
+        overflow: visible !important;
+    }
+    
+    .plotly-graph-div {
+        height: auto !important;
+        width: 100% !important;
+    }
+    
+    /* Force re-render of matplotlib plots */
+    .element-container .stPlotlyChart > div {
+        width: 100% !important;
+    }
+    
+    /* Main styling */
+    .main-header {
+        font-size: 3rem;
+        color: #2E8B57;
+        text-align: center;
+        margin-bottom: 2rem;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        font-weight: 700;
+        background: linear-gradient(135deg, #2E8B57, #667eea);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    .metric-container {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        margin: 0.5rem 0;
+        box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+        color: white;
+        text-align: center;
+    }
+    
+    .success-message {
+        background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+        border-left: 5px solid #28a745;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        color: #155724;
+    }
+    
+    .info-message {
+        background: linear-gradient(135deg, #d1ecf1 0%, #bee5eb 100%);
+        border-left: 5px solid #17a2b8;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        color: #0c5460;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
 class WildlifeClassificationApp:
-    """Main application class with enhanced deep learning visualizations"""
+    """Main application class with enhanced deep learning visualizations and fixed plots"""
 
     def __init__(self):
         self.session_manager = SessionManager()
@@ -63,7 +133,7 @@ class WildlifeClassificationApp:
         if st.sidebar.button("📄 Load Previous Session"):
             if self.session_manager.load_session():
                 st.success("Previous session loaded successfully!")
-                st.rerun()
+                st.experimental_rerun()
 
         # Auto-save session periodically
         if hasattr(st.session_state, 'last_autosave'):
@@ -77,7 +147,7 @@ class WildlifeClassificationApp:
         """Display professional header"""
         st.markdown('<h1 class="main-header">🦁 African Wildlife Classification System</h1>',
                    unsafe_allow_html=True)
-        st.markdown('<h3 style="text-align: center; color: #666; margin-bottom: 2rem;">Advanced ML & Deep Learning with Comprehensive Visualizations</h3>',
+        st.markdown('<h3 style="text-align: center; color: #666; margin-bottom: 2rem;">Advanced ML & Deep Learning with Fixed Visualizations</h3>',
                    unsafe_allow_html=True)
 
         # Display validation strategy info
@@ -118,7 +188,7 @@ class WildlifeClassificationApp:
             """, unsafe_allow_html=True)
 
     def display_sidebar_status(self):
-        """Display comprehensive sidebar status"""
+        """Display comprehensive sidebar status with visualization controls"""
         st.sidebar.markdown("### 📊 System Status")
 
         status = self.session_manager.get_training_status()
@@ -128,6 +198,19 @@ class WildlifeClassificationApp:
                 st.sidebar.markdown(f"✅ {task}")
             else:
                 st.sidebar.markdown(f"⏳ {task}")
+
+        # Visualization Controls
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 🎨 Visualization Controls")
+
+        if st.sidebar.button("🔄 Refresh All Plots"):
+            self.clear_visualization_cache()
+            st.sidebar.success("All plots refreshed!")
+            st.experimental_rerun()
+
+        if st.sidebar.button("🧹 Clear Plot Cache"):
+            self.clear_plot_cache()
+            st.sidebar.success("Plot cache cleared!")
 
         # Validation strategy info
         st.sidebar.markdown("---")
@@ -139,7 +222,7 @@ class WildlifeClassificationApp:
         # Enhanced features info
         st.sidebar.markdown("---")
         st.sidebar.markdown("### ✨ Enhanced Features")
-        st.sidebar.success("🎨 Advanced Visualizations")
+        st.sidebar.success("🎨 Fixed Visualizations")
         st.sidebar.success("🧠 Model Interpretability")
         st.sidebar.success("📈 Real-time Training Analytics")
         st.sidebar.success("🎯 Ensemble Predictions")
@@ -155,8 +238,9 @@ class WildlifeClassificationApp:
         if st.sidebar.button("🗑️ Clear All Data"):
             if st.sidebar.checkbox("Confirm deletion"):
                 self.session_manager.clear_session()
+                self.clear_visualization_cache()
                 st.sidebar.success("All data cleared!")
-                st.rerun()
+                st.experimental_rerun()
 
         # Dataset info
         st.sidebar.markdown("---")
@@ -173,6 +257,152 @@ class WildlifeClassificationApp:
                 st.sidebar.text(f"{cls.title()}: {count}")
         else:
             st.sidebar.error("Dataset not found")
+
+    def _display_existing_feature_engineering_results(self):
+        """Display existing feature engineering results if available"""
+
+        # Check if we have feature extraction results
+        if 'feature_extractor' in st.session_state and st.session_state.feature_extractor is not None:
+            feature_extractor = st.session_state.feature_extractor
+
+            # Display feature extraction summary
+            with st.expander("📊 Feature Extraction Results", expanded=False):
+                st.subheader("🔍 Feature Extraction Summary")
+
+                if hasattr(feature_extractor, 'pipeline_info') and feature_extractor.pipeline_info:
+                    info = feature_extractor.pipeline_info
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Original Features", info.get('original_features', 'N/A'))
+                    with col2:
+                        st.metric("Total Samples", info.get('total_samples', 'N/A'))
+                    with col3:
+                        scaling_status = "✅ Applied" if info.get('scaling_applied', False) else "❌ Not Applied"
+                        st.metric("Scaling", scaling_status)
+                    with col4:
+                        pipeline_summary = feature_extractor.get_pipeline_summary()
+                        st.text_area("Pipeline Summary", pipeline_summary, height=100)
+
+                else:
+                    st.info("Feature extractor exists but detailed info not available")
+
+        # Check if we have feature optimization results
+        if 'feature_optimizer' in st.session_state and st.session_state.feature_optimizer is not None:
+            optimizer = st.session_state.feature_optimizer
+
+            with st.expander("🎯 Feature Selection & PCA Results", expanded=True):
+                st.subheader("🎯 Advanced Feature Selection Analysis")
+
+                # Re-display feature selection results if available
+                if hasattr(optimizer, 'results') and 'feature_selection' in optimizer.results:
+                    performance_results = optimizer.results['feature_selection']
+
+                    # Get original features count from feature extractor
+                    original_features = st.session_state.get('X', np.array([])).shape[1] if 'X' in st.session_state else 8186
+
+                    # Use the fixed display method from feature engineering
+                    try:
+                        optimizer._display_feature_selection_results_fixed(performance_results, original_features)
+                    except Exception as e:
+                        st.error(f"Error displaying feature selection results: {e}")
+
+                        # Fallback: show basic table
+                        results_data = []
+                        for method, results in performance_results.items():
+                            results_data.append({
+                                'Method': method,
+                                'Features': results['n_features'],
+                                'CV Accuracy': f"{results['accuracy']:.4f}",
+                                'Time (s)': f"{results['time']:.2f}"
+                            })
+
+                        if results_data:
+                            df = pd.DataFrame(results_data)
+                            st.dataframe(df, use_container_width=True)
+
+                        if st.button("🔄 Refresh Feature Selection Display"):
+                            st.experimental_rerun()
+
+                # Display PCA results if available
+                if hasattr(optimizer, 'pca_transformer') and optimizer.pca_transformer is not None:
+                    st.subheader("📉 PCA Dimensionality Reduction")
+
+                    # Show PCA summary
+                    n_components = optimizer.pca_transformer.n_components_
+                    explained_variance = optimizer.pca_transformer.explained_variance_ratio_.sum()
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("PCA Components", n_components)
+                    with col2:
+                        st.metric("Explained Variance", f"{explained_variance:.3f}")
+                    with col3:
+                        st.metric("Variance %", f"{explained_variance*100:.1f}%")
+
+                    # Try to recreate PCA visualization
+                    if st.button("🔄 Show PCA Analysis", key="show_pca_analysis"):
+                        try:
+                            # Create simplified PCA visualization
+                            thresholds = Config.PCA_VARIANCE_THRESHOLDS
+                            components_data = []
+
+                            for threshold in thresholds:
+                                if threshold <= explained_variance:
+                                    components_data.append({
+                                        'Threshold': f"{threshold*100:.0f}%",
+                                        'Components': n_components,
+                                        'Explained_Variance': explained_variance
+                                    })
+
+                            if components_data:
+                                df_pca = pd.DataFrame(components_data)
+                                st.dataframe(df_pca, use_container_width=True)
+
+                        except Exception as e:
+                            st.error(f"Error creating PCA visualization: {e}")
+
+                else:
+                    st.info("PCA not applied in current pipeline")
+
+        # Show current pipeline status
+        if ('feature_extractor' in st.session_state and
+            st.session_state.feature_extractor is not None and
+            hasattr(st.session_state.feature_extractor, 'get_expected_feature_count')):
+
+            st.subheader("🔧 Current Pipeline Status")
+
+            expected_features = st.session_state.feature_extractor.get_expected_feature_count()
+            pipeline_summary = st.session_state.feature_extractor.get_pipeline_summary()
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.info(f"**Pipeline:** {pipeline_summary}")
+            with col2:
+                st.info(f"**Expected Features:** {expected_features}")
+
+    def clear_visualization_cache(self):
+        """Clear all visualization-related session state"""
+        keys_to_remove = []
+        for key in st.session_state.keys():
+            if any(viz_type in key for viz_type in [
+                'feature_selection_', 'pca_analysis_', 'plot_', 'feature_',
+                'pca_', 'viz_', 'chart_', 'graph_'
+            ]):
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del st.session_state[key]
+
+    def clear_plot_cache(self):
+        """Clear only plot cache"""
+        keys_to_remove = []
+        for key in st.session_state.keys():
+            if any(plot_type in key for plot_type in ['plot_', 'chart_', 'graph_']):
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del st.session_state[key]
 
     def show_system_overview(self):
         """Display comprehensive system overview"""
@@ -225,8 +455,8 @@ class WildlifeClassificationApp:
         with feature_cols[0]:
             st.markdown("""
             <div class="metric-container">
-                <h4>🎨 Advanced Visualizations</h4>
-                <p>Comprehensive training analytics, feature maps, and model insights</p>
+                <h4>🎨 Fixed Visualizations</h4>
+                <p>Stable plots that persist across tab switches</p>
             </div>
             """, unsafe_allow_html=True)
 
@@ -315,14 +545,25 @@ class WildlifeClassificationApp:
                         st.error("EDA failed. Please check your dataset structure.")
 
     def show_traditional_ml(self):
-        """Display traditional ML training interface"""
+        """Display traditional ML training interface with fixed visualizations"""
         st.header("🔧 Traditional Machine Learning")
+
+        # Visualization refresh button at the top
+        col_refresh, col_space = st.columns([1, 4])
+        with col_refresh:
+            if st.button("🔄 Refresh ML Visualizations", key="refresh_ml_main"):
+                self.clear_visualization_cache()
+                st.success("ML visualizations refreshed!")
+                st.experimental_rerun()
 
         if not self.data_manager.check_dataset_existence()[0]:
             st.error("Dataset not found! Please check the System Overview.")
             return
 
         st.info(f"Using {Config.CV_FOLDS}-fold cross-validation for model evaluation")
+
+        # Always show feature engineering results if they exist
+        self._display_existing_feature_engineering_results()
 
         # Training configuration
         st.subheader("⚙️ Training Configuration")
@@ -356,10 +597,11 @@ class WildlifeClassificationApp:
             if st.button("🔄 Retrain Models"):
                 st.session_state.ml_models_trained = False
                 st.session_state.ml_results = None
-                st.rerun()
+                self.clear_visualization_cache()
+                st.experimental_rerun()
 
             if 'ml_results' in st.session_state and st.session_state.ml_results:
-                self.display_ml_results(st.session_state.ml_results)
+                self.display_ml_results_fixed(st.session_state.ml_results)
 
             return
 
@@ -367,7 +609,7 @@ class WildlifeClassificationApp:
             self.train_traditional_ml(use_optimized, perform_feature_selection, train_ensembles)
 
     def train_traditional_ml(self, use_optimized, perform_feature_selection, train_ensembles):
-        """Train traditional ML models"""
+        """Train traditional ML models with fixed visualizations"""
 
         start_time = time.time()
 
@@ -397,16 +639,25 @@ class WildlifeClassificationApp:
                 y = st.session_state.y
                 st.info("✅ Using cached features")
 
-            # Feature optimization
+            # Feature optimization with fixed visualizations
             X_final = X
 
             if perform_feature_selection:
                 st.header("🎯 Advanced Feature Selection")
 
+                # Clear any existing feature selection visualizations
+                self.clear_feature_selection_cache()
+
                 if 'feature_optimizer' not in st.session_state:
                     optimizer = FeatureOptimizer()
-                    X_selected, best_selector = optimizer.compare_feature_selection_methods(X, y)
-                    X_final, final_components = optimizer.apply_pca_analysis(X_selected, y)
+
+                    # Feature selection with fixed visualization
+                    with st.spinner("Performing feature selection analysis..."):
+                        X_selected, best_selector = optimizer.compare_feature_selection_methods(X, y)
+
+                    # PCA analysis with fixed visualization
+                    with st.spinner("Performing PCA analysis..."):
+                        X_final, final_components = optimizer.apply_pca_analysis(X_selected, y)
 
                     feature_extractor.set_feature_pipeline(
                         feature_selector=best_selector,
@@ -417,6 +668,7 @@ class WildlifeClassificationApp:
                     st.session_state.X_final = X_final
                 else:
                     X_final = st.session_state.X_final
+                    st.info("✅ Using cached feature optimization results")
 
             # Model training
             st.header("🤖 Model Training")
@@ -446,24 +698,46 @@ class WildlifeClassificationApp:
                 training_time
             )
 
-            self.display_ml_results(all_results)
+            self.display_ml_results_fixed(all_results)
             self.session_manager.save_session()
 
         except Exception as e:
             st.error(f"Training failed: {str(e)}")
             st.exception(e)
 
-    def display_ml_results(self, all_results):
-        """Display ML results"""
+    def clear_feature_selection_cache(self):
+        """Clear feature selection visualization cache"""
+        keys_to_remove = []
+        for key in st.session_state.keys():
+            if any(fs_type in key for fs_type in ['feature_selection_', 'pca_analysis_']):
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del st.session_state[key]
+
+    def display_ml_results_fixed(self, all_results):
+        """Display ML results with fixed visualizations"""
 
         st.header("📊 Training Results")
+
+        # Add refresh button for results
+        if st.button("🔄 Refresh Results Visualization", key="refresh_ml_results"):
+            self.clear_visualization_cache()
+            st.experimental_rerun()
 
         trainer = MLModelTrainer()
         best_model_info = trainer.display_results(all_results)
 
         if best_model_info:
             st.subheader("📈 Performance Visualizations")
-            self.visualizer.create_model_comparison_dashboard(all_results)
+
+            # Create stable visualization container
+            with st.container():
+                try:
+                    self.visualizer.create_model_comparison_dashboard(all_results)
+                except Exception as e:
+                    st.error(f"Visualization error: {e}")
+                    st.info("Click 'Refresh Results Visualization' to reload the charts.")
 
         # Performance summary
         summary_data = []
@@ -526,7 +800,7 @@ class WildlifeClassificationApp:
             if st.button(f"🔄 Retrain {model_choice}"):
                 st.session_state[model_key] = False
                 st.session_state[result_key] = None
-                st.rerun()
+                st.experimental_rerun()
 
             return
 
@@ -617,31 +891,51 @@ class WildlifeClassificationApp:
             tab1, tab2, tab3 = st.tabs(["Training Dashboard", "Model Architecture", "Performance Analysis"])
 
             with tab1:
-                # Training dashboard
-                trainer.visualizer.create_training_dashboard(results['history'])
+                # Training dashboard with unique key
+                dashboard_key = f"training_dashboard_{hashlib.md5(str(results.get('history', {})).encode()).hexdigest()[:8]}"
+                try:
+                    trainer.visualizer.create_training_dashboard(results['history'], dashboard_key)
+                except Exception as e:
+                    st.error(f"Dashboard visualization error: {e}")
+                    if st.button("Refresh Training Dashboard", key=f"refresh_{dashboard_key}"):
+                        st.experimental_rerun()
 
             with tab2:
-                # Model architecture
-                trainer.visualizer.create_model_architecture_visualization(
-                    results['model'], results['model_name']
-                )
+                # Model architecture with unique key
+                arch_key = f"model_arch_{hashlib.md5(str(results.get('model_name', '')).encode()).hexdigest()[:8]}"
+                try:
+                    trainer.visualizer.create_model_architecture_visualization(
+                        results['model'], results['model_name'], arch_key
+                    )
+                except Exception as e:
+                    st.error(f"Architecture visualization error: {e}")
+                    if st.button("Refresh Architecture View", key=f"refresh_arch_{arch_key}"):
+                        st.experimental_rerun()
 
                 # Model complexity analysis
                 if results.get('model'):
-                    complexity = analyze_model_complexity(results['model'])
+                    try:
+                        complexity = analyze_model_complexity(results['model'])
 
-                    st.subheader("Model Complexity Analysis")
-                    col5, col6, col7 = st.columns(3)
-                    with col5:
-                        st.metric("Parameters", f"{complexity['total_params']:,}")
-                    with col6:
-                        st.metric("Model Size (MB)", f"{complexity['model_size_mb']:.1f}")
-                    with col7:
-                        st.metric("Est. FLOPs", f"{complexity['estimated_flops']:,}")
+                        st.subheader("Model Complexity Analysis")
+                        col5, col6, col7 = st.columns(3)
+                        with col5:
+                            st.metric("Parameters", f"{complexity['total_params']:,}")
+                        with col6:
+                            st.metric("Model Size (MB)", f"{complexity['model_size_mb']:.1f}")
+                        with col7:
+                            st.metric("Est. FLOPs", f"{complexity['estimated_flops']:,}")
+                    except Exception as e:
+                        st.error(f"Complexity analysis error: {e}")
 
             with tab3:
-                # Performance analysis
-                self.create_performance_analysis(results)
+                # Performance analysis with error handling
+                try:
+                    self.create_performance_analysis(results)
+                except Exception as e:
+                    st.error(f"Performance analysis error: {e}")
+                    if st.button("Refresh Performance Analysis"):
+                        st.experimental_rerun()
 
         # Performance summary
         st.subheader("📋 Performance Summary")
@@ -660,16 +954,20 @@ class WildlifeClassificationApp:
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     def create_performance_analysis(self, results):
-        """Create detailed performance analysis"""
+        """Create detailed performance analysis with error handling"""
 
         st.subheader("Model Performance Analysis")
 
-        # Standard evaluation
-        trainer = DeepLearningTrainer()
-        evaluation_results = trainer.evaluate_model(results, results['model_name'])
+        try:
+            # Standard evaluation
+            trainer = DeepLearningTrainer()
+            evaluation_results = trainer.evaluate_model(results, results['model_name'])
 
-        if evaluation_results:
-            st.success("Model evaluation completed")
+            if evaluation_results:
+                st.success("Model evaluation completed")
+        except Exception as e:
+            st.error(f"Performance analysis failed: {e}")
+            st.info("Training completed successfully, but detailed analysis is unavailable.")
 
     def show_ensemble_predictions(self):
         """Ensemble predictions interface"""
@@ -712,7 +1010,7 @@ class WildlifeClassificationApp:
                 self.make_ensemble_prediction(ensemble_model, image, list(available_models.keys()))
 
     def make_ensemble_prediction(self, ensemble_model, image, model_names):
-        """Make ensemble prediction"""
+        """Make ensemble prediction with error handling"""
 
         try:
             # Prepare image
@@ -805,8 +1103,14 @@ class WildlifeClassificationApp:
             st.warning("No trained models found. Please train some models first!")
             return
 
-        # Create comparison dashboard
-        self.visualizer.create_model_comparison_dashboard(all_results)
+        # Create comparison dashboard with error handling
+        try:
+            self.visualizer.create_model_comparison_dashboard(all_results)
+        except Exception as e:
+            st.error(f"Comparison visualization error: {e}")
+            if st.button("Refresh Comparison Dashboard"):
+                self.clear_visualization_cache()
+                st.experimental_rerun()
 
         # Ranking table
         st.subheader("Model Performance Ranking")
@@ -865,7 +1169,7 @@ class WildlifeClassificationApp:
 
     def show_prediction_interface(self):
         """Display enhanced prediction interface"""
-        st.header("Model Prediction Interface")
+        st.header("🎯 Model Prediction Interface")
 
         # Get available models
         available_models = self._get_organized_models()
@@ -996,7 +1300,7 @@ class WildlifeClassificationApp:
         return organized_models
 
     def make_prediction(self, image, model_name, true_class=None):
-        """Make prediction with comprehensive validation"""
+        """Make prediction with comprehensive validation and error handling"""
 
         try:
             col1, col2 = st.columns(2)
@@ -1091,7 +1395,10 @@ class WildlifeClassificationApp:
                                 title="Prediction Confidence",
                                 color='Probability', color_continuous_scale='viridis')
                     fig.update_traces(texttemplate='%{y:.3f}', textposition='outside')
-                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Use unique key for prediction plot
+                    prediction_key = f"prediction_{hashlib.md5(str(time.time()).encode()).hexdigest()[:8]}"
+                    st.plotly_chart(fig, use_container_width=True, key=prediction_key)
 
                     max_prob = np.max(probabilities)
                     st.metric("Max Probability", f"{max_prob:.3f}")
@@ -1161,7 +1468,7 @@ def main():
         st.subheader("Recovery Options")
 
         if st.button("Restart Application"):
-            st.rerun()
+            st.experimental_rerun()
 
         if st.button("Clear All Data"):
             session_manager = SessionManager()

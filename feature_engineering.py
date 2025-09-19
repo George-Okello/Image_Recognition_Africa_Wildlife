@@ -1,6 +1,6 @@
 """
 Feature extraction and optimization for traditional ML models
-Updated to use only cross-validation without train/test splits
+Fixed version with stable visualizations and proper state management
 """
 
 import os
@@ -11,6 +11,9 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import seaborn as sns
 import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest, f_classif, RFE, SelectFromModel
 from sklearn.decomposition import PCA
@@ -22,6 +25,7 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score
 from skimage.feature import hog, local_binary_pattern
 from joblib import Parallel, delayed
 import time
+import hashlib
 from config import Config
 
 
@@ -326,7 +330,7 @@ class FeatureExtractor:
 
 
 class FeatureOptimizer:
-    """Advanced feature selection and optimization with cross-validation"""
+    """Advanced feature selection and optimization with cross-validation and fixed visualizations"""
 
     def __init__(self):
         self.scaler = StandardScaler()
@@ -337,7 +341,7 @@ class FeatureOptimizer:
         self.pca_transformer = None
 
     def compare_feature_selection_methods(self, X, y):
-        """Compare multiple feature selection methods using cross-validation"""
+        """Compare multiple feature selection methods using cross-validation with fixed visualizations"""
 
         st.subheader("Advanced Feature Selection Analysis")
         st.info("Comparing multiple feature selection methods using cross-validation...")
@@ -439,8 +443,8 @@ class FeatureOptimizer:
 
         progress_bar.empty()
 
-        # Display comprehensive results
-        self._display_feature_selection_results(performance_results, X_scaled.shape[1])
+        # Display comprehensive results with fixed visualization
+        self._display_feature_selection_results_fixed(performance_results, X_scaled.shape[1])
 
         # Select best method
         best_method_name = self._select_best_method(performance_results)
@@ -456,8 +460,124 @@ class FeatureOptimizer:
 
         return best_method_data['X_transformed'], best_method_data['selector']
 
+    def _display_feature_selection_results_fixed(self, performance_results, original_features):
+        """Display comprehensive feature selection results with stable visualization"""
+
+        # Create unique key based on data hash for consistency
+        data_hash = hashlib.md5(str(performance_results).encode()).hexdigest()[:8]
+        plot_key = f"feature_selection_{data_hash}"
+
+        # Store in session state for persistence
+        if plot_key not in st.session_state:
+            st.session_state[plot_key] = {
+                'performance_results': performance_results,
+                'original_features': original_features,
+                'timestamp': time.time()
+            }
+
+        # Create results table
+        results_data = []
+        for method, results in performance_results.items():
+            n_features = results['n_features']
+            reduction = (1 - n_features / original_features) * 100
+
+            results_data.append({
+                'Method': method,
+                'Features': n_features,
+                'Reduction (%)': f"{reduction:.1f}%",
+                'CV Accuracy': f"{results['accuracy']:.4f}",
+                'CV Std': f"{results.get('std', 0):.4f}",
+                'Time (s)': f"{results['time']:.2f}",
+                'Description': results['description']
+            })
+
+        st.subheader("Feature Selection Methods Comparison")
+        results_df = pd.DataFrame(results_data)
+        st.dataframe(results_df, use_container_width=True)
+
+        # Create stable visualization with container and refresh option
+        viz_container = st.container()
+
+        with viz_container:
+            col1, col2 = st.columns([4, 1])
+
+            with col2:
+                st.markdown("**Controls:**")
+                if st.button("Refresh Plot", key=f"refresh_{plot_key}"):
+                    if plot_key in st.session_state:
+                        del st.session_state[plot_key]
+                    st.experimental_rerun()
+
+                st.markdown("**Status:**")
+                st.success("✅ Plot Ready")
+
+            with col1:
+                # Create the visualization
+                fig = self._create_feature_selection_plot(results_df)
+                st.plotly_chart(fig, use_container_width=True, key=f"plot_{plot_key}")
+
+    def _create_feature_selection_plot(self, results_df):
+        """Create feature selection comparison plot"""
+
+        # Convert accuracy strings back to floats for plotting
+        results_df['Accuracy_Float'] = results_df['CV Accuracy'].str.replace('CV Accuracy: ', '').astype(float)
+        results_df['Features_Int'] = results_df['Features'].astype(int)
+
+        # Create subplot
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=('Feature Selection Performance', 'Features vs Accuracy'),
+            specs=[[{"secondary_y": False}, {"secondary_y": False}]]
+        )
+
+        # Bar chart of accuracy
+        fig.add_trace(
+            go.Bar(
+                x=results_df['Method'],
+                y=results_df['Accuracy_Float'],
+                name='CV Accuracy',
+                marker_color=px.colors.qualitative.Set3,
+                text=[f'{acc:.3f}' for acc in results_df['Accuracy_Float']],
+                textposition='outside'
+            ),
+            row=1, col=1
+        )
+
+        # Scatter plot of features vs accuracy
+        fig.add_trace(
+            go.Scatter(
+                x=results_df['Features_Int'],
+                y=results_df['Accuracy_Float'],
+                mode='markers+text',
+                text=results_df['Method'],
+                textposition='top center',
+                marker=dict(
+                    size=12,
+                    color=results_df['Accuracy_Float'],
+                    colorscale='viridis',
+                    showscale=True
+                ),
+                name='Performance'
+            ),
+            row=1, col=2
+        )
+
+        # Update layout
+        fig.update_layout(
+            height=500,
+            title_text="Feature Selection Analysis Dashboard",
+            showlegend=False
+        )
+
+        fig.update_xaxes(title_text="Method", row=1, col=1)
+        fig.update_yaxes(title_text="CV Accuracy", row=1, col=1)
+        fig.update_xaxes(title_text="Number of Features", row=1, col=2)
+        fig.update_yaxes(title_text="CV Accuracy", row=1, col=2)
+
+        return fig
+
     def apply_pca_analysis(self, X_selected, y):
-        """Apply PCA with comprehensive analysis using cross-validation"""
+        """Apply PCA with comprehensive analysis using cross-validation and fixed visualization"""
 
         st.subheader("PCA Dimensionality Reduction Analysis")
         st.info("Analyzing PCA with different variance thresholds...")
@@ -492,6 +612,9 @@ class FeatureOptimizer:
                 'components': pca.n_components_
             }
 
+        # Display PCA analysis with fixed visualization
+        self._display_pca_analysis_fixed(pca_results, pca_performance)
+
         # Choose best configuration based on cross-validation performance
         best_threshold = max(pca_performance.keys(),
                            key=lambda x: pca_performance[x]['accuracy'])
@@ -504,27 +627,154 @@ class FeatureOptimizer:
 
         return best_config['X_transformed'], best_config['n_components']
 
-    def _display_feature_selection_results(self, performance_results, original_features):
-        """Display comprehensive feature selection results"""
-        # Create results table
-        results_data = []
-        for method, results in performance_results.items():
-            n_features = results['n_features']
-            reduction = (1 - n_features / original_features) * 100
+    def _display_pca_analysis_fixed(self, pca_results, pca_performance):
+        """Display PCA analysis with stable visualization"""
 
-            results_data.append({
-                'Method': method,
-                'Features': n_features,
-                'Reduction (%)': f"{reduction:.1f}%",
-                'CV Accuracy': f"{results['accuracy']:.4f}",
-                'CV Std': f"{results.get('std', 0):.4f}",
-                'Time (s)': f"{results['time']:.2f}",
-                'Description': results['description']
-            })
+        # Create unique key for PCA visualization
+        pca_hash = hashlib.md5(str(pca_performance).encode()).hexdigest()[:8]
+        pca_key = f"pca_analysis_{pca_hash}"
 
-        st.subheader("Feature Selection Methods Comparison")
-        results_df = pd.DataFrame(results_data)
-        st.dataframe(results_df, use_container_width=True)
+        # Store in session state
+        if pca_key not in st.session_state:
+            st.session_state[pca_key] = {
+                'pca_results': pca_results,
+                'pca_performance': pca_performance,
+                'timestamp': time.time()
+            }
+
+        # Create PCA dashboard with container
+        pca_container = st.container()
+
+        with pca_container:
+            # Control panel
+            col_control, col_viz = st.columns([1, 4])
+
+            with col_control:
+                st.markdown("**PCA Controls:**")
+                if st.button("Refresh PCA Plot", key=f"refresh_pca_{pca_key}"):
+                    if pca_key in st.session_state:
+                        del st.session_state[pca_key]
+                    st.experimental_rerun()
+
+                st.markdown("**Analysis:**")
+                best_threshold = max(pca_performance.keys(),
+                                   key=lambda x: pca_performance[x]['accuracy'])
+                st.metric("Best Threshold", f"{best_threshold*100:.0f}%")
+                st.metric("Components", pca_results[best_threshold]['n_components'])
+                st.metric("Accuracy", f"{pca_performance[best_threshold]['accuracy']:.4f}")
+
+            with col_viz:
+                # Create PCA visualization
+                fig = self._create_pca_dashboard(pca_results, pca_performance)
+                st.plotly_chart(fig, use_container_width=True, key=f"pca_plot_{pca_key}")
+
+    def _create_pca_dashboard(self, pca_results, pca_performance):
+        """Create comprehensive PCA analysis dashboard"""
+
+        # Prepare data
+        thresholds = list(pca_results.keys())
+        components = [pca_results[t]['n_components'] for t in thresholds]
+        explained_var = [pca_results[t]['explained_variance'] for t in thresholds]
+        accuracies = [pca_performance[t]['accuracy'] for t in thresholds]
+        times = [pca_performance[t]['time'] for t in thresholds]
+
+        # Create subplot dashboard
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                'Explained Variance by Components',
+                'Performance vs Components',
+                'Variance Threshold Comparison',
+                'PCA Summary Statistics'
+            ),
+            specs=[
+                [{"secondary_y": False}, {"secondary_y": False}],
+                [{"secondary_y": False}, {"type": "table"}]
+            ]
+        )
+
+        # 1. Explained variance plot
+        fig.add_trace(
+            go.Scatter(
+                x=components,
+                y=explained_var,
+                mode='lines+markers',
+                name='Explained Variance',
+                line=dict(color='blue', width=3),
+                marker=dict(size=10)
+            ),
+            row=1, col=1
+        )
+
+        # 2. Performance vs components
+        fig.add_trace(
+            go.Scatter(
+                x=components,
+                y=accuracies,
+                mode='lines+markers',
+                name='CV Accuracy',
+                line=dict(color='red', width=3),
+                marker=dict(size=10)
+            ),
+            row=1, col=2
+        )
+
+        # 3. Variance threshold comparison
+        fig.add_trace(
+            go.Bar(
+                x=[f"{t*100:.0f}%" for t in thresholds],
+                y=components,
+                name='Components Required',
+                marker_color='green',
+                text=components,
+                textposition='outside'
+            ),
+            row=2, col=1
+        )
+
+        # 4. Summary table
+        summary_data = {
+            'Threshold': [f"{t*100:.0f}%" for t in thresholds],
+            'Components': components,
+            'Explained Var': [f"{v:.3f}" for v in explained_var],
+            'CV Accuracy': [f"{a:.4f}" for a in accuracies],
+            'Time (s)': [f"{t:.2f}" for t in times]
+        }
+
+        fig.add_trace(
+            go.Table(
+                header=dict(
+                    values=list(summary_data.keys()),
+                    fill_color='lightblue',
+                    align='center'
+                ),
+                cells=dict(
+                    values=list(summary_data.values()),
+                    fill_color='white',
+                    align='center'
+                )
+            ),
+            row=2, col=2
+        )
+
+        # Update layout
+        fig.update_layout(
+            height=700,
+            title_text="Comprehensive PCA Analysis Dashboard",
+            showlegend=False
+        )
+
+        # Update axis labels
+        fig.update_xaxes(title_text="Number of Components", row=1, col=1)
+        fig.update_yaxes(title_text="Explained Variance Ratio", row=1, col=1)
+
+        fig.update_xaxes(title_text="Number of Components", row=1, col=2)
+        fig.update_yaxes(title_text="CV Accuracy", row=1, col=2)
+
+        fig.update_xaxes(title_text="Variance Threshold", row=2, col=1)
+        fig.update_yaxes(title_text="Components Required", row=2, col=1)
+
+        return fig
 
     def _select_best_method(self, performance_results):
         """Select the best feature selection method based on cross-validation performance"""
