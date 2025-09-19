@@ -1,6 +1,6 @@
 """
 Feature extraction and optimization for traditional ML models
-Updated with proper train/validation/test splitting and comprehensive pipeline management
+Updated to use only cross-validation without train/test splits
 """
 
 import os
@@ -18,7 +18,7 @@ from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.linear_model import Lasso
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from skimage.feature import hog, local_binary_pattern
 from joblib import Parallel, delayed
 import time
@@ -26,7 +26,7 @@ from config import Config
 
 
 class FeatureExtractor:
-    """Extract comprehensive features from images with proper pipeline management"""
+    """Extract comprehensive features from images with cross-validation pipeline management"""
 
     def __init__(self):
         self.scaler = StandardScaler()
@@ -159,8 +159,8 @@ class FeatureExtractor:
         return valid_features
 
     def prepare_dataset(self, perform_quality_check=True):
-        """Prepare complete dataset with proper train/validation/test splitting"""
-        st.info("Preparing dataset with proper train/validation/test splits...")
+        """Prepare complete dataset for cross-validation"""
+        st.info("Preparing dataset for cross-validation...")
 
         # Validate configuration
         Config.validate_data_splits()
@@ -225,7 +225,7 @@ class FeatureExtractor:
 
         if not X:
             st.error("No features could be extracted from the dataset!")
-            return None, None, None, None, None, None
+            return None, None
 
         X = np.array(X)
         y = np.array(y)
@@ -233,60 +233,9 @@ class FeatureExtractor:
         st.success(f"Successfully extracted features from {len(X)} images")
         st.info(f"Feature vector dimension: {X.shape[1]}")
 
-        # Proper data splitting based on configuration
-        if Config.USE_CROSS_VALIDATION:
-            # Cross-validation approach: only need train+val and test
-            X_train_val, X_test, y_train_val, y_test = train_test_split(
-                X, y,
-                test_size=Config.TEST_SIZE,
-                random_state=Config.RANDOM_STATE,
-                stratify=y
-            )
-
-            # For cross-validation, we don't create a separate validation set
-            X_train, X_val, y_train, y_val = X_train_val, None, y_train_val, None
-
-            st.info(f"Using {Config.CV_FOLDS}-fold cross-validation")
-            st.info(f"Training+Validation: {len(X_train)} samples, Test: {len(X_test)} samples")
-
-        else:
-            # Three-way split: train/validation/test
-            # First split: separate test set
-            X_temp, X_test, y_temp, y_test = train_test_split(
-                X, y,
-                test_size=Config.TEST_SIZE,
-                random_state=Config.RANDOM_STATE,
-                stratify=y
-            )
-
-            # Second split: separate training and validation from remaining data
-            val_size_adjusted = Config.VALIDATION_SIZE / (Config.TRAIN_SIZE + Config.VALIDATION_SIZE)
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_temp, y_temp,
-                test_size=val_size_adjusted,
-                random_state=Config.RANDOM_STATE,
-                stratify=y_temp
-            )
-
-            # Display split information
-            if perform_quality_check:
-                st.subheader("Dataset Split Information")
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    st.metric("Training Samples", len(X_train))
-                    st.metric("Training %", f"{(len(X_train) / len(X)) * 100:.1f}%")
-
-                with col2:
-                    st.metric("Validation Samples", len(X_val))
-                    st.metric("Validation %", f"{(len(X_val) / len(X)) * 100:.1f}%")
-
-                with col3:
-                    st.metric("Test Samples", len(X_test))
-                    st.metric("Test %", f"{(len(X_test) / len(X)) * 100:.1f}%")
-
-        # Fit the scaler on training data only
-        self.scaler.fit(X_train)
+        # For cross-validation, we use all data for training
+        # The scaler will be fitted on the full dataset
+        self.scaler.fit(X)
         self.is_fitted = True
 
         # Store pipeline info for later reference
@@ -294,12 +243,13 @@ class FeatureExtractor:
             'original_features': X.shape[1],
             'scaling_applied': True,
             'feature_selection_applied': False,
-            'pca_applied': False
+            'pca_applied': False,
+            'total_samples': len(X)
         }
 
-        st.info("Feature scaler fitted on training data")
+        st.info("Feature scaler fitted on complete dataset for cross-validation")
 
-        return X_train, X_val, X_test, y_train, y_val, y_test
+        return X, y
 
     def set_feature_pipeline(self, feature_selector=None, pca_transformer=None):
         """Set the complete feature transformation pipeline"""
@@ -376,7 +326,7 @@ class FeatureExtractor:
 
 
 class FeatureOptimizer:
-    """Advanced feature selection and optimization with proper pipeline management"""
+    """Advanced feature selection and optimization with cross-validation"""
 
     def __init__(self):
         self.scaler = StandardScaler()
@@ -386,52 +336,34 @@ class FeatureOptimizer:
         self.best_selector = None
         self.pca_transformer = None
 
-    def compare_feature_selection_methods(self, X_train, X_val, X_test, y_train, y_val, y_test):
-        """Compare multiple feature selection methods using validation set"""
+    def compare_feature_selection_methods(self, X, y):
+        """Compare multiple feature selection methods using cross-validation"""
 
         st.subheader("Advanced Feature Selection Analysis")
-        st.info("Comparing multiple feature selection methods using validation set...")
+        st.info("Comparing multiple feature selection methods using cross-validation...")
 
         # Scale features first
-        X_train_scaled = self.scaler.fit_transform(X_train)
-
-        if Config.USE_CROSS_VALIDATION:
-            # For cross-validation, we don't have a separate validation set
-            X_val_scaled = None
-            X_test_scaled = self.scaler.transform(X_test)
-        else:
-            X_val_scaled = self.scaler.transform(X_val)
-            X_test_scaled = self.scaler.transform(X_test)
+        X_scaled = self.scaler.fit_transform(X)
 
         selection_methods = {}
 
         # 1. Baseline (no selection)
         selection_methods['No Selection'] = {
-            'X_train': X_train_scaled,
-            'X_val': X_val_scaled,
-            'X_test': X_test_scaled,
-            'n_features': X_train_scaled.shape[1],
+            'X_transformed': X_scaled,
+            'n_features': X_scaled.shape[1],
             'selector': None,
             'description': 'All original features'
         }
 
         # 2. Univariate Feature Selection
         st.text("Running Univariate F-score selection...")
-        k_best = min(1000, X_train_scaled.shape[1])
+        k_best = min(1000, X_scaled.shape[1])
         f_selector = SelectKBest(score_func=f_classif, k=k_best)
-        X_train_f = f_selector.fit_transform(X_train_scaled, y_train)
-
-        if X_val_scaled is not None:
-            X_val_f = f_selector.transform(X_val_scaled)
-        else:
-            X_val_f = None
-        X_test_f = f_selector.transform(X_test_scaled)
+        X_f = f_selector.fit_transform(X_scaled, y)
 
         selection_methods['Univariate F-test'] = {
-            'X_train': X_train_f,
-            'X_val': X_val_f,
-            'X_test': X_test_f,
-            'n_features': X_train_f.shape[1],
+            'X_transformed': X_f,
+            'n_features': X_f.shape[1],
             'selector': f_selector,
             'description': f'Top {k_best} features by F-score'
         }
@@ -443,25 +375,17 @@ class FeatureOptimizer:
             random_state=Config.RANDOM_STATE,
             n_jobs=Config.N_JOBS
         )
-        n_features_rfe = min(800, X_train_scaled.shape[1])
+        n_features_rfe = min(800, X_scaled.shape[1])
         rfe_selector = RFE(
             estimator=rf_estimator,
             n_features_to_select=n_features_rfe,
-            step=max(1, X_train_scaled.shape[1] // 20)
+            step=max(1, X_scaled.shape[1] // 20)
         )
-        X_train_rfe = rfe_selector.fit_transform(X_train_scaled, y_train)
-
-        if X_val_scaled is not None:
-            X_val_rfe = rfe_selector.transform(X_val_scaled)
-        else:
-            X_val_rfe = None
-        X_test_rfe = rfe_selector.transform(X_test_scaled)
+        X_rfe = rfe_selector.fit_transform(X_scaled, y)
 
         selection_methods['RFE'] = {
-            'X_train': X_train_rfe,
-            'X_val': X_val_rfe,
-            'X_test': X_test_rfe,
-            'n_features': X_train_rfe.shape[1],
+            'X_transformed': X_rfe,
+            'n_features': X_rfe.shape[1],
             'selector': rfe_selector,
             'description': f'RFE with Random Forest ({n_features_rfe} features)'
         }
@@ -473,84 +397,50 @@ class FeatureOptimizer:
             random_state=Config.RANDOM_STATE,
             n_jobs=Config.N_JOBS
         )
-        extra_trees.fit(X_train_scaled, y_train)
+        extra_trees.fit(X_scaled, y)
         importance_selector = SelectFromModel(extra_trees, threshold='median')
-        X_train_importance = importance_selector.fit_transform(X_train_scaled, y_train)
-
-        if X_val_scaled is not None:
-            X_val_importance = importance_selector.transform(X_val_scaled)
-        else:
-            X_val_importance = None
-        X_test_importance = importance_selector.transform(X_test_scaled)
+        X_importance = importance_selector.fit_transform(X_scaled, y)
 
         selection_methods['Tree Importance'] = {
-            'X_train': X_train_importance,
-            'X_val': X_val_importance,
-            'X_test': X_test_importance,
-            'n_features': X_train_importance.shape[1],
+            'X_transformed': X_importance,
+            'n_features': X_importance.shape[1],
             'selector': importance_selector,
             'description': 'Extra Trees feature importance'
         }
 
-        # Performance evaluation using validation set or cross-validation
+        # Performance evaluation using cross-validation
         st.text("Evaluating feature selection methods...")
         performance_results = {}
 
         progress_bar = st.progress(0)
+        cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True, random_state=Config.RANDOM_STATE)
 
-        if Config.USE_CROSS_VALIDATION:
-            # Use cross-validation for evaluation
-            cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True, random_state=Config.RANDOM_STATE)
+        for i, (method, data) in enumerate(selection_methods.items()):
+            X_method = data['X_transformed']
+            start_time = time.time()
 
-            for i, (method, data) in enumerate(selection_methods.items()):
-                X_train_method = data['X_train']
-                start_time = time.time()
+            # Use SVM for quick evaluation with CV
+            svm_test = SVC(kernel='rbf', C=1.0, random_state=Config.RANDOM_STATE)
+            cv_scores = cross_val_score(svm_test, X_method, y, cv=cv, scoring='accuracy',
+                                        n_jobs=min(Config.N_JOBS, Config.CV_FOLDS))
 
-                # Use SVM for quick evaluation with CV
-                svm_test = SVC(kernel='rbf', C=1.0, random_state=Config.RANDOM_STATE)
-                cv_scores = cross_val_score(svm_test, X_train_method, y_train, cv=cv, scoring='accuracy')
+            training_time = time.time() - start_time
+            mean_accuracy = cv_scores.mean()
 
-                training_time = time.time() - start_time
-                mean_accuracy = cv_scores.mean()
+            performance_results[method] = {
+                'accuracy': mean_accuracy,
+                'std': cv_scores.std(),
+                'time': training_time,
+                'n_features': data['n_features'],
+                'description': data['description']
+            }
 
-                performance_results[method] = {
-                    'accuracy': mean_accuracy,
-                    'std': cv_scores.std(),
-                    'time': training_time,
-                    'n_features': data['n_features'],
-                    'description': data['description']
-                }
-
-                progress_bar.progress((i + 1) / len(selection_methods))
-        else:
-            # Use validation set for evaluation
-            for i, (method, data) in enumerate(selection_methods.items()):
-                X_train_method = data['X_train']
-                X_val_method = data['X_val']
-
-                start_time = time.time()
-
-                # Use SVM for quick evaluation
-                svm_test = SVC(kernel='rbf', C=1.0, random_state=Config.RANDOM_STATE)
-                svm_test.fit(X_train_method, y_train)
-                y_pred = svm_test.predict(X_val_method)
-
-                training_time = time.time() - start_time
-                accuracy = accuracy_score(y_val, y_pred)
-
-                performance_results[method] = {
-                    'accuracy': accuracy,
-                    'time': training_time,
-                    'n_features': data['n_features'],
-                    'description': data['description']
-                }
-
-                progress_bar.progress((i + 1) / len(selection_methods))
+            progress_bar.progress((i + 1) / len(selection_methods))
 
         progress_bar.empty()
 
         # Display comprehensive results
-        self._display_feature_selection_results(performance_results, X_train_scaled.shape[1])
+        self._display_feature_selection_results(performance_results, X_scaled.shape[1])
 
         # Select best method
         best_method_name = self._select_best_method(performance_results)
@@ -564,10 +454,10 @@ class FeatureOptimizer:
         self.best_method = best_method_name
         self.selection_methods = selection_methods
 
-        return best_method_data['X_train'], best_method_data['X_val'], best_method_data['X_test'], best_method_data['selector']
+        return best_method_data['X_transformed'], best_method_data['selector']
 
-    def apply_pca_analysis(self, X_train_selected, X_val_selected, X_test_selected, y_train, y_val, y_test):
-        """Apply PCA with comprehensive analysis using validation set"""
+    def apply_pca_analysis(self, X_selected, y):
+        """Apply PCA with comprehensive analysis using cross-validation"""
 
         st.subheader("PCA Dimensionality Reduction Analysis")
         st.info("Analyzing PCA with different variance thresholds...")
@@ -578,38 +468,21 @@ class FeatureOptimizer:
         # Test different variance thresholds
         for threshold in Config.PCA_VARIANCE_THRESHOLDS:
             pca = PCA(n_components=threshold, random_state=Config.RANDOM_STATE)
-            X_train_pca = pca.fit_transform(X_train_selected)
-
-            if Config.USE_CROSS_VALIDATION:
-                X_val_pca = None
-            else:
-                X_val_pca = pca.transform(X_val_selected)
-            X_test_pca = pca.transform(X_test_selected)
+            X_pca = pca.fit_transform(X_selected)
 
             pca_results[threshold] = {
                 'pca': pca,
-                'X_train': X_train_pca,
-                'X_val': X_val_pca,
-                'X_test': X_test_pca,
+                'X_transformed': X_pca,
                 'n_components': pca.n_components_,
                 'explained_variance': pca.explained_variance_ratio_.sum()
             }
 
-            # Performance evaluation
+            # Performance evaluation using cross-validation
             start_time = time.time()
-
-            if Config.USE_CROSS_VALIDATION:
-                # Use cross-validation
-                cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True, random_state=Config.RANDOM_STATE)
-                svm_pca = SVC(kernel='rbf', C=1.0, random_state=Config.RANDOM_STATE)
-                cv_scores = cross_val_score(svm_pca, X_train_pca, y_train, cv=cv, scoring='accuracy')
-                accuracy = cv_scores.mean()
-            else:
-                # Use validation set
-                svm_pca = SVC(kernel='rbf', C=1.0, random_state=Config.RANDOM_STATE)
-                svm_pca.fit(X_train_pca, y_train)
-                y_pred_pca = svm_pca.predict(X_val_pca)
-                accuracy = accuracy_score(y_val, y_pred_pca)
+            cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True, random_state=Config.RANDOM_STATE)
+            svm_pca = SVC(kernel='rbf', C=1.0, random_state=Config.RANDOM_STATE)
+            cv_scores = cross_val_score(svm_pca, X_pca, y, cv=cv, scoring='accuracy')
+            accuracy = cv_scores.mean()
 
             training_time = time.time() - start_time
 
@@ -619,7 +492,7 @@ class FeatureOptimizer:
                 'components': pca.n_components_
             }
 
-        # Choose best configuration based on validation performance
+        # Choose best configuration based on cross-validation performance
         best_threshold = max(pca_performance.keys(),
                            key=lambda x: pca_performance[x]['accuracy'])
         best_config = pca_results[best_threshold]
@@ -629,7 +502,7 @@ class FeatureOptimizer:
 
         st.success(f"Best PCA configuration: {best_threshold*100:.0f}% variance ({best_config['n_components']} components)")
 
-        return best_config['X_train'], best_config['X_val'], best_config['X_test'], best_config['n_components']
+        return best_config['X_transformed'], best_config['n_components']
 
     def _display_feature_selection_results(self, performance_results, original_features):
         """Display comprehensive feature selection results"""
@@ -639,33 +512,23 @@ class FeatureOptimizer:
             n_features = results['n_features']
             reduction = (1 - n_features / original_features) * 100
 
-            if Config.USE_CROSS_VALIDATION:
-                results_data.append({
-                    'Method': method,
-                    'Features': n_features,
-                    'Reduction (%)': f"{reduction:.1f}%",
-                    'CV Accuracy': f"{results['accuracy']:.4f}",
-                    'CV Std': f"{results.get('std', 0):.4f}",
-                    'Time (s)': f"{results['time']:.2f}",
-                    'Description': results['description']
-                })
-            else:
-                results_data.append({
-                    'Method': method,
-                    'Features': n_features,
-                    'Reduction (%)': f"{reduction:.1f}%",
-                    'Val Accuracy': f"{results['accuracy']:.4f}",
-                    'Time (s)': f"{results['time']:.2f}",
-                    'Description': results['description']
-                })
+            results_data.append({
+                'Method': method,
+                'Features': n_features,
+                'Reduction (%)': f"{reduction:.1f}%",
+                'CV Accuracy': f"{results['accuracy']:.4f}",
+                'CV Std': f"{results.get('std', 0):.4f}",
+                'Time (s)': f"{results['time']:.2f}",
+                'Description': results['description']
+            })
 
         st.subheader("Feature Selection Methods Comparison")
         results_df = pd.DataFrame(results_data)
         st.dataframe(results_df, use_container_width=True)
 
     def _select_best_method(self, performance_results):
-        """Select the best feature selection method based on validation performance"""
-        # Simply select method with highest validation accuracy
+        """Select the best feature selection method based on cross-validation performance"""
+        # Simply select method with highest CV accuracy
         best_method = max(performance_results.keys(),
                          key=lambda x: performance_results[x]['accuracy'])
 
@@ -674,23 +537,13 @@ class FeatureOptimizer:
 
         best_results = performance_results[best_method]
 
-        if Config.USE_CROSS_VALIDATION:
-            st.markdown(f"""
-            **Recommended Method:** {best_method}
+        st.markdown(f"""
+        **Recommended Method:** {best_method}
 
-            - **CV Accuracy:** {best_results['accuracy']:.4f} ± {best_results.get('std', 0):.4f}
-            - **Features:** {best_results['n_features']:,}
-            - **Training Time:** {best_results['time']:.2f}s
-            - **Description:** {best_results['description']}
-            """)
-        else:
-            st.markdown(f"""
-            **Recommended Method:** {best_method}
-
-            - **Validation Accuracy:** {best_results['accuracy']:.4f}
-            - **Features:** {best_results['n_features']:,}
-            - **Training Time:** {best_results['time']:.2f}s
-            - **Description:** {best_results['description']}
-            """)
+        - **CV Accuracy:** {best_results['accuracy']:.4f} ± {best_results.get('std', 0):.4f}
+        - **Features:** {best_results['n_features']:,}
+        - **Training Time:** {best_results['time']:.2f}s
+        - **Description:** {best_results['description']}
+        """)
 
         return best_method

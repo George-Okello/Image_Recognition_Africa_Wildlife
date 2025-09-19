@@ -1,6 +1,6 @@
 """
 Traditional Machine Learning Models Training and Evaluation
-Clean implementation with proper validation strategy
+Updated to use only cross-validation without train/test splits
 """
 
 import numpy as np
@@ -25,7 +25,7 @@ from config import Config
 
 
 class MLModelTrainer:
-    """ML model training with proper validation"""
+    """ML model training with cross-validation only"""
 
     def __init__(self):
         self.models = {}
@@ -62,98 +62,64 @@ class MLModelTrainer:
                 'Naive Bayes': GaussianNB()
             }
 
-    def train_individual_models(self, X_train, X_val, X_test, y_train, y_val, y_test, use_optimized=False):
-        """Train individual ML models with proper validation"""
+    def train_individual_models(self, X, y, use_optimized=False):
+        """Train individual ML models using cross-validation"""
 
         models_config = self.get_model_configurations(use_optimized)
         config_type = "Optimized" if use_optimized else "Default"
 
-        st.info(f"Training models with {config_type} parameters")
+        st.info(f"Training models with {config_type} parameters using {Config.CV_FOLDS}-fold cross-validation")
 
         individual_results = {}
         progress_bar = st.progress(0)
 
-        if Config.USE_CROSS_VALIDATION:
-            # Cross-validation approach
-            cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
-                                 random_state=Config.RANDOM_STATE)
+        # Setup cross-validation
+        cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
+                             random_state=Config.RANDOM_STATE)
 
-            for i, (name, model) in enumerate(models_config.items()):
-                start_time = time.time()
-                try:
-                    # Cross-validation scores
-                    cv_scores = cross_val_score(model, X_train, y_train, cv=cv,
-                                                scoring='accuracy',
-                                                n_jobs=min(Config.N_JOBS, Config.CV_FOLDS))
+        for i, (name, model) in enumerate(models_config.items()):
+            start_time = time.time()
+            try:
+                # Cross-validation scores
+                cv_scores = cross_val_score(model, X, y, cv=cv,
+                                            scoring=Config.CV_SCORING,
+                                            n_jobs=min(Config.N_JOBS, Config.CV_FOLDS))
 
-                    # Train on full training set
-                    model.fit(X_train, y_train)
+                # Train final model on full dataset for predictions
+                final_model = copy.deepcopy(model)
+                final_model.fit(X, y)
 
-                    # Test on held-out test set
-                    y_pred_test = model.predict(X_test)
-                    test_accuracy = accuracy_score(y_test, y_pred_test)
+                # Get cross-validated predictions for confusion matrix
+                from sklearn.model_selection import cross_val_predict
+                cv_predictions = cross_val_predict(model, X, y, cv=cv)
 
-                    individual_results[name] = {
-                        'model': model,
-                        'cv_mean': cv_scores.mean(),
-                        'cv_std': cv_scores.std(),
-                        'test_accuracy': test_accuracy,
-                        'accuracy': test_accuracy,
-                        'predictions': y_pred_test,
-                        'y_test': y_test,
-                        'training_time': time.time() - start_time
-                    }
+                individual_results[name] = {
+                    'model': final_model,
+                    'cv_mean': cv_scores.mean(),
+                    'cv_std': cv_scores.std(),
+                    'cv_scores': cv_scores,
+                    'accuracy': cv_scores.mean(),  # For compatibility
+                    'predictions': cv_predictions,
+                    'y_true': y,
+                    'training_time': time.time() - start_time
+                }
 
-                    st.success(
-                        f"{name}: CV {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f}), Test {test_accuracy:.4f}")
+                st.success(
+                    f"{name}: CV {cv_scores.mean():.4f} (±{cv_scores.std() * 2:.4f})")
 
-                except Exception as e:
-                    st.error(f"Failed to train {name}: {str(e)}")
-                    individual_results[name] = {
-                        'model': None, 'accuracy': 0.0, 'error': str(e)
-                    }
+            except Exception as e:
+                st.error(f"Failed to train {name}: {str(e)}")
+                individual_results[name] = {
+                    'model': None, 'accuracy': 0.0, 'error': str(e)
+                }
 
-                progress_bar.progress((i + 1) / len(models_config))
-
-        else:
-            # Train/validation/test approach
-            for i, (name, model) in enumerate(models_config.items()):
-                start_time = time.time()
-                try:
-                    # Train and validate
-                    model.fit(X_train, y_train)
-                    y_pred_val = model.predict(X_val)
-                    val_accuracy = accuracy_score(y_val, y_pred_val)
-
-                    # Test
-                    y_pred_test = model.predict(X_test)
-                    test_accuracy = accuracy_score(y_test, y_pred_test)
-
-                    individual_results[name] = {
-                        'model': model,
-                        'val_accuracy': val_accuracy,
-                        'test_accuracy': test_accuracy,
-                        'accuracy': test_accuracy,
-                        'predictions': y_pred_test,
-                        'y_test': y_test,
-                        'training_time': time.time() - start_time
-                    }
-
-                    st.success(f"{name}: Val {val_accuracy:.4f}, Test {test_accuracy:.4f}")
-
-                except Exception as e:
-                    st.error(f"Failed to train {name}: {str(e)}")
-                    individual_results[name] = {
-                        'model': None, 'accuracy': 0.0, 'error': str(e)
-                    }
-
-                progress_bar.progress((i + 1) / len(models_config))
+            progress_bar.progress((i + 1) / len(models_config))
 
         progress_bar.empty()
         return individual_results
 
-    def train_ensemble_methods(self, X_train, X_val, X_test, y_train, y_val, y_test, individual_results):
-        """Train ensemble methods"""
+    def train_ensemble_methods(self, X, y, individual_results):
+        """Train ensemble methods using cross-validation"""
 
         st.subheader("Training Ensemble Methods")
 
@@ -180,14 +146,10 @@ class MLModelTrainer:
 
         for i, (name, train_func, params) in enumerate(ensemble_methods):
             try:
-                result = train_func(valid_models, X_train, X_val, X_test,
-                                    y_train, y_val, y_test, **params)
+                result = train_func(valid_models, X, y, **params)
                 ensemble_results[name] = result
 
-                if Config.USE_CROSS_VALIDATION:
-                    st.success(f"{name}: CV {result.get('cv_mean', 0):.4f}, Test {result['accuracy']:.4f}")
-                else:
-                    st.success(f"{name}: Val {result.get('val_accuracy', 0):.4f}, Test {result['accuracy']:.4f}")
+                st.success(f"{name}: CV {result.get('cv_mean', 0):.4f} (±{result.get('cv_std', 0)*2:.4f})")
 
             except Exception as e:
                 st.error(f"Failed to train {name}: {str(e)}")
@@ -198,51 +160,40 @@ class MLModelTrainer:
         progress_bar.empty()
         return ensemble_results
 
-    def _train_voting_ensemble(self, base_models, X_train, X_val, X_test,
-                               y_train, y_val, y_test, voting='hard'):
-        """Train voting ensemble"""
+    def _train_voting_ensemble(self, base_models, X, y, voting='hard'):
+        """Train voting ensemble using cross-validation"""
         start_time = time.time()
 
         voting_clf = VotingClassifier(estimators=base_models, voting=voting,
                                       n_jobs=Config.N_JOBS)
 
-        if Config.USE_CROSS_VALIDATION:
-            cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
-                                 random_state=Config.RANDOM_STATE)
-            cv_scores = cross_val_score(voting_clf, X_train, y_train, cv=cv,
-                                        scoring='accuracy')
-            voting_clf.fit(X_train, y_train)
-            y_pred_test = voting_clf.predict(X_test)
-            test_accuracy = accuracy_score(y_test, y_pred_test)
+        # Cross-validation
+        cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
+                             random_state=Config.RANDOM_STATE)
+        cv_scores = cross_val_score(voting_clf, X, y, cv=cv,
+                                    scoring=Config.CV_SCORING)
 
-            return {
-                'model': voting_clf,
-                'cv_mean': cv_scores.mean(),
-                'cv_std': cv_scores.std(),
-                'accuracy': test_accuracy,
-                'predictions': y_pred_test,
-                'y_test': y_test,
-                'training_time': time.time() - start_time
-            }
-        else:
-            voting_clf.fit(X_train, y_train)
-            y_pred_val = voting_clf.predict(X_val)
-            val_accuracy = accuracy_score(y_val, y_pred_val)
-            y_pred_test = voting_clf.predict(X_test)
-            test_accuracy = accuracy_score(y_test, y_pred_test)
+        # Train final model
+        final_model = copy.deepcopy(voting_clf)
+        final_model.fit(X, y)
 
-            return {
-                'model': voting_clf,
-                'val_accuracy': val_accuracy,
-                'accuracy': test_accuracy,
-                'predictions': y_pred_test,
-                'y_test': y_test,
-                'training_time': time.time() - start_time
-            }
+        # Get cross-validated predictions
+        from sklearn.model_selection import cross_val_predict
+        cv_predictions = cross_val_predict(voting_clf, X, y, cv=cv)
 
-    def _train_bagging_ensemble(self, base_models, X_train, X_val, X_test,
-                                y_train, y_val, y_test):
-        """Train bagging ensemble"""
+        return {
+            'model': final_model,
+            'cv_mean': cv_scores.mean(),
+            'cv_std': cv_scores.std(),
+            'cv_scores': cv_scores,
+            'accuracy': cv_scores.mean(),
+            'predictions': cv_predictions,
+            'y_true': y,
+            'training_time': time.time() - start_time
+        }
+
+    def _train_bagging_ensemble(self, base_models, X, y):
+        """Train bagging ensemble using cross-validation"""
         start_time = time.time()
 
         bagging_clf = BaggingClassifier(
@@ -250,43 +201,33 @@ class MLModelTrainer:
             n_estimators=100, random_state=Config.RANDOM_STATE, n_jobs=Config.N_JOBS
         )
 
-        if Config.USE_CROSS_VALIDATION:
-            cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
-                                 random_state=Config.RANDOM_STATE)
-            cv_scores = cross_val_score(bagging_clf, X_train, y_train, cv=cv,
-                                        scoring='accuracy')
-            bagging_clf.fit(X_train, y_train)
-            y_pred_test = bagging_clf.predict(X_test)
-            test_accuracy = accuracy_score(y_test, y_pred_test)
+        # Cross-validation
+        cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
+                             random_state=Config.RANDOM_STATE)
+        cv_scores = cross_val_score(bagging_clf, X, y, cv=cv,
+                                    scoring=Config.CV_SCORING)
 
-            return {
-                'model': bagging_clf,
-                'cv_mean': cv_scores.mean(),
-                'cv_std': cv_scores.std(),
-                'accuracy': test_accuracy,
-                'predictions': y_pred_test,
-                'y_test': y_test,
-                'training_time': time.time() - start_time
-            }
-        else:
-            bagging_clf.fit(X_train, y_train)
-            y_pred_val = bagging_clf.predict(X_val)
-            val_accuracy = accuracy_score(y_val, y_pred_val)
-            y_pred_test = bagging_clf.predict(X_test)
-            test_accuracy = accuracy_score(y_test, y_pred_test)
+        # Train final model
+        final_model = copy.deepcopy(bagging_clf)
+        final_model.fit(X, y)
 
-            return {
-                'model': bagging_clf,
-                'val_accuracy': val_accuracy,
-                'accuracy': test_accuracy,
-                'predictions': y_pred_test,
-                'y_test': y_test,
-                'training_time': time.time() - start_time
-            }
+        # Get cross-validated predictions
+        from sklearn.model_selection import cross_val_predict
+        cv_predictions = cross_val_predict(bagging_clf, X, y, cv=cv)
 
-    def _train_gradient_boosting(self, base_models, X_train, X_val, X_test,
-                                 y_train, y_val, y_test):
-        """Train gradient boosting"""
+        return {
+            'model': final_model,
+            'cv_mean': cv_scores.mean(),
+            'cv_std': cv_scores.std(),
+            'cv_scores': cv_scores,
+            'accuracy': cv_scores.mean(),
+            'predictions': cv_predictions,
+            'y_true': y,
+            'training_time': time.time() - start_time
+        }
+
+    def _train_gradient_boosting(self, base_models, X, y):
+        """Train gradient boosting using cross-validation"""
         start_time = time.time()
 
         gb_clf = GradientBoostingClassifier(
@@ -294,43 +235,33 @@ class MLModelTrainer:
             random_state=Config.RANDOM_STATE
         )
 
-        if Config.USE_CROSS_VALIDATION:
-            cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
-                                 random_state=Config.RANDOM_STATE)
-            cv_scores = cross_val_score(gb_clf, X_train, y_train, cv=cv,
-                                        scoring='accuracy')
-            gb_clf.fit(X_train, y_train)
-            y_pred_test = gb_clf.predict(X_test)
-            test_accuracy = accuracy_score(y_test, y_pred_test)
+        # Cross-validation
+        cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
+                             random_state=Config.RANDOM_STATE)
+        cv_scores = cross_val_score(gb_clf, X, y, cv=cv,
+                                    scoring=Config.CV_SCORING)
 
-            return {
-                'model': gb_clf,
-                'cv_mean': cv_scores.mean(),
-                'cv_std': cv_scores.std(),
-                'accuracy': test_accuracy,
-                'predictions': y_pred_test,
-                'y_test': y_test,
-                'training_time': time.time() - start_time
-            }
-        else:
-            gb_clf.fit(X_train, y_train)
-            y_pred_val = gb_clf.predict(X_val)
-            val_accuracy = accuracy_score(y_val, y_pred_val)
-            y_pred_test = gb_clf.predict(X_test)
-            test_accuracy = accuracy_score(y_test, y_pred_test)
+        # Train final model
+        final_model = copy.deepcopy(gb_clf)
+        final_model.fit(X, y)
 
-            return {
-                'model': gb_clf,
-                'val_accuracy': val_accuracy,
-                'accuracy': test_accuracy,
-                'predictions': y_pred_test,
-                'y_test': y_test,
-                'training_time': time.time() - start_time
-            }
+        # Get cross-validated predictions
+        from sklearn.model_selection import cross_val_predict
+        cv_predictions = cross_val_predict(gb_clf, X, y, cv=cv)
 
-    def _train_adaboost(self, base_models, X_train, X_val, X_test,
-                        y_train, y_val, y_test):
-        """Train AdaBoost"""
+        return {
+            'model': final_model,
+            'cv_mean': cv_scores.mean(),
+            'cv_std': cv_scores.std(),
+            'cv_scores': cv_scores,
+            'accuracy': cv_scores.mean(),
+            'predictions': cv_predictions,
+            'y_true': y,
+            'training_time': time.time() - start_time
+        }
+
+    def _train_adaboost(self, base_models, X, y):
+        """Train AdaBoost using cross-validation"""
         start_time = time.time()
 
         ada_clf = AdaBoostClassifier(
@@ -338,39 +269,30 @@ class MLModelTrainer:
             n_estimators=100, learning_rate=1.0, random_state=Config.RANDOM_STATE
         )
 
-        if Config.USE_CROSS_VALIDATION:
-            cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
-                                 random_state=Config.RANDOM_STATE)
-            cv_scores = cross_val_score(ada_clf, X_train, y_train, cv=cv,
-                                        scoring='accuracy')
-            ada_clf.fit(X_train, y_train)
-            y_pred_test = ada_clf.predict(X_test)
-            test_accuracy = accuracy_score(y_test, y_pred_test)
+        # Cross-validation
+        cv = StratifiedKFold(n_splits=Config.CV_FOLDS, shuffle=True,
+                             random_state=Config.RANDOM_STATE)
+        cv_scores = cross_val_score(ada_clf, X, y, cv=cv,
+                                    scoring=Config.CV_SCORING)
 
-            return {
-                'model': ada_clf,
-                'cv_mean': cv_scores.mean(),
-                'cv_std': cv_scores.std(),
-                'accuracy': test_accuracy,
-                'predictions': y_pred_test,
-                'y_test': y_test,
-                'training_time': time.time() - start_time
-            }
-        else:
-            ada_clf.fit(X_train, y_train)
-            y_pred_val = ada_clf.predict(X_val)
-            val_accuracy = accuracy_score(y_val, y_pred_val)
-            y_pred_test = ada_clf.predict(X_test)
-            test_accuracy = accuracy_score(y_test, y_pred_test)
+        # Train final model
+        final_model = copy.deepcopy(ada_clf)
+        final_model.fit(X, y)
 
-            return {
-                'model': ada_clf,
-                'val_accuracy': val_accuracy,
-                'accuracy': test_accuracy,
-                'predictions': y_pred_test,
-                'y_test': y_test,
-                'training_time': time.time() - start_time
-            }
+        # Get cross-validated predictions
+        from sklearn.model_selection import cross_val_predict
+        cv_predictions = cross_val_predict(ada_clf, X, y, cv=cv)
+
+        return {
+            'model': final_model,
+            'cv_mean': cv_scores.mean(),
+            'cv_std': cv_scores.std(),
+            'cv_scores': cv_scores,
+            'accuracy': cv_scores.mean(),
+            'predictions': cv_predictions,
+            'y_true': y,
+            'training_time': time.time() - start_time
+        }
 
     def display_results(self, all_results):
         """Display comprehensive results"""
@@ -383,7 +305,7 @@ class MLModelTrainer:
             st.error("No valid models to display")
             return
 
-        # Sort by test accuracy
+        # Sort by CV accuracy
         sorted_results = sorted(valid_results.items(),
                                 key=lambda x: x[1]['accuracy'], reverse=True)
 
@@ -395,17 +317,11 @@ class MLModelTrainer:
             row_data = {
                 'Rank': i,
                 'Model': name,
-                'Test Accuracy': f"{result['accuracy']:.4f}",
-                'Test Accuracy (%)': f"{result['accuracy'] * 100:.2f}%",
+                'CV Mean': f"{result['cv_mean']:.4f}",
+                'CV Std': f"{result['cv_std']:.4f}",
+                'CV Accuracy (%)': f"{result['cv_mean'] * 100:.2f}%",
                 'Training Time': f"{result.get('training_time', 0):.2f}s"
             }
-
-            if Config.USE_CROSS_VALIDATION and 'cv_mean' in result:
-                row_data['CV Mean'] = f"{result['cv_mean']:.4f}"
-                row_data['CV Std'] = f"{result['cv_std']:.4f}"
-            elif 'val_accuracy' in result:
-                row_data['Val Accuracy'] = f"{result['val_accuracy']:.4f}"
-
             ranking_data.append(row_data)
 
         df = pd.DataFrame(ranking_data)
@@ -413,7 +329,7 @@ class MLModelTrainer:
 
         # Best model
         best_name, best_result = sorted_results[0]
-        st.success(f"Best Model: {best_name} (Test Accuracy: {best_result['accuracy']:.4f})")
+        st.success(f"Best Model: {best_name} (CV Accuracy: {best_result['cv_mean']:.4f} ± {best_result['cv_std']:.4f})")
 
         # Display confusion matrix for best model
         self.display_confusion_matrix(best_result, best_name)
@@ -421,16 +337,16 @@ class MLModelTrainer:
         return sorted_results[0]
 
     def display_confusion_matrix(self, result, model_name):
-        """Display confusion matrix"""
+        """Display confusion matrix using cross-validated predictions"""
 
-        y_true = result['y_test']
+        y_true = result['y_true']
         y_pred = result['predictions']
 
         if y_pred is None:
             st.error("No predictions available")
             return
 
-        st.subheader(f"Confusion Matrix - {model_name}")
+        st.subheader(f"Confusion Matrix - {model_name} (Cross-Validated)")
 
         # Create confusion matrix
         cm = confusion_matrix(y_true, y_pred)
@@ -486,5 +402,5 @@ class MLModelTrainer:
                 'Support': int(weighted['support'])
             })
 
-        st.subheader("Classification Report")
+        st.subheader("Classification Report (Cross-Validated)")
         st.dataframe(pd.DataFrame(report_data), use_container_width=True)

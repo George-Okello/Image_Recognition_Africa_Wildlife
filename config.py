@@ -1,6 +1,6 @@
 """
 Configuration settings for African Wildlife Classification System
-Updated with proper data splitting strategy
+Updated to use only cross-validation without train/test splits
 """
 
 import os
@@ -15,14 +15,8 @@ class Config:
     CLASSES = ['buffalo', 'elephant', 'rhino', 'zebra']
     VALID_EXTS = ['.jpg', '.jpeg', '.png']
 
-    # Data Split Configuration - FIXED APPROACH
-    # Option 1: Train/Validation/Test split
-    TRAIN_SIZE = 0.70        # 70% for training
-    VALIDATION_SIZE = 0.15   # 15% for validation (model selection/hyperparameter tuning)
-    TEST_SIZE = 0.15         # 15% for final evaluation (never used for model selection)
-
-    # Option 2: Cross-validation approach (alternative to validation split)
-    USE_CROSS_VALIDATION = False  # Set to True to use CV instead of validation split
+    # Cross-validation Configuration - ONLY APPROACH
+    USE_CROSS_VALIDATION = True  # Always True now
     CV_FOLDS = 5
     CV_SCORING = 'accuracy'
 
@@ -94,14 +88,9 @@ class Config:
 
     @classmethod
     def validate_data_splits(cls):
-        """Validate that data split configuration is correct"""
-        if not cls.USE_CROSS_VALIDATION:
-            total = cls.TRAIN_SIZE + cls.VALIDATION_SIZE + cls.TEST_SIZE
-            if abs(total - 1.0) > 1e-6:
-                raise ValueError(f"Data splits must sum to 1.0, got {total}")
-        else:
-            if cls.CV_FOLDS < 2:
-                raise ValueError("Cross-validation requires at least 2 folds")
+        """Validate that cross-validation configuration is correct"""
+        if cls.CV_FOLDS < 2:
+            raise ValueError("Cross-validation requires at least 2 folds")
 
 # Utility functions for compatibility
 def get_data_path():
